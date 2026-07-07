@@ -36,7 +36,12 @@ function createMainWindow() {
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl && !app.isPackaged && isLocalRendererUrl(rendererUrl)) {
+    mainWindow.loadURL(rendererUrl);
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "../../dist/renderer/index.html"));
+  }
 }
 
 app.whenReady().then(() => {
@@ -140,4 +145,13 @@ function getImportFilters(purpose) {
     { name: "Supported Documents", extensions: ["doc", "docx", "pdf", "txt", "md", "xls", "xlsx"] },
     { name: "All Files", extensions: ["*"] }
   ];
+}
+
+function isLocalRendererUrl(value) {
+  try {
+    const rendererUrl = new URL(value);
+    return rendererUrl.protocol === "http:" && ["127.0.0.1", "localhost", "::1", "[::1]"].includes(rendererUrl.hostname);
+  } catch {
+    return false;
+  }
 }
