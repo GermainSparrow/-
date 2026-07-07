@@ -1,0 +1,637 @@
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+const JSZip = require("jszip");
+const ExcelJS = require("exceljs");
+const { PDFDocument, StandardFonts } = require("pdf-lib");
+
+const {
+  applyRestoration,
+  applySanitization,
+  detectEntities
+} = require("../src/main/services/entity-service");
+const {
+  createEncryptedMapping,
+  decryptMappingPackage
+} = require("../src/main/services/crypto-service");
+const {
+  extractDocxDocument,
+  sanitizeDocxDocument
+} = require("../src/main/services/docx-processor");
+const {
+  extractPdfDocument,
+  sanitizePdfDocument
+} = require("../src/main/services/pdf-processor");
+const {
+  extractXlsxDocument,
+  sanitizeXlsxDocument
+} = require("../src/main/services/xlsx-processor");
+const {
+  restoreTextDocument,
+  sanitizeTextDocument
+} = require("../src/main/services/text-processor");
+const {
+  runRestoration,
+  runSanitization
+} = require("../src/main/services/sanitizer-service");
+const {
+  summarizeFile
+} = require("../src/main/services/document-service");
+const {
+  assertSanitizePayloadAuthorized,
+  authorizeFilePaths,
+  authorizeOutputDirectory,
+  clearAuthorizationsForTest
+} = require("../src/main/services/path-authorization-service");
+
+async function makeTempDir() {
+  return fs.mkdtemp(path.join(os.tmpdir(), "sanitizer-test-"));
+}
+
+function manualEntity(overrides = {}) {
+  return {
+    id: "manual-1",
+    docId: "doc1",
+    filePath: "fixture.txt",
+    type: "person",
+    originalValue: "李明",
+    maskedValue: "<PERSON_001>",
+    stableId: "PERSON_001",
+    contextHash: "",
+    locations: [],
+    enabled: true,
+    source: "manual",
+    ...overrides
+  };
+}
+
+test("detects structured entities and replaces longer strings first", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "李明的手机号是13800138000，邮箱是liming@example.com，账号是6222021234567890123。"
+    }]
+  }];
+  const detected = detectEntities(documents);
+  assert.ok(detected.some((entity) => entity.type === "phone"));
+  assert.ok(detected.some((entity) => entity.type === "email"));
+  assert.ok(detected.some((entity) => entity.type === "account"));
+
+  const text = "李明和明";
+  const result = applySanitization(text, [
+    manualEntity({ originalValue: "明", maskedValue: "<CHAR_001>", stableId: "CHAR_001" }),
+    manualEntity({ originalValue: "李明", maskedValue: "<PERSON_001>", stableId: "PERSON_001" })
+  ]);
+  assert.equal(result, "<PERSON_001>和<CHAR_001>");
+});
+
+test("restores only existing placeholders and stable tags", () => {
+  const entities = [manualEntity({ originalValue: "李明", maskedValue: "李四<PERSON_001>" })];
+  assert.equal(applyRestoration("李四<PERSON_001>涨薪", entities), "李明涨薪");
+  assert.equal(applyRestoration("董事长涨薪", entities), "董事长涨薪");
+  assert.equal(applyRestoration("<PERSON_001>涨薪", entities), "李明涨薪");
+});
+
+test("encrypts reversible mapping with password and rejects wrong password", () => {
+  const mappingPackage = createEncryptedMapping({
+    docId: "doc1",
+    sourceFileName: "fixture.txt",
+    entities: [manualEntity()],
+    credential: { method: "password", password: "correct-password" }
+  });
+
+  const decrypted = decryptMappingPackage(mappingPackage, {
+    method: "password",
+    password: "correct-password"
+  });
+  assert.equal(decrypted.entities[0].originalValue, "李明");
+  assert.throws(() => decryptMappingPackage(mappingPackage, {
+    method: "password",
+    password: "wrong-password"
+  }), /解密失败/);
+});
+
+test("encrypts reversible mapping with key file", async () => {
+  const tempDir = await makeTempDir();
+  const keyFilePath = path.join(tempDir, "restore.key");
+  await fs.writeFile(keyFilePath, "local key material");
+
+  const mappingPackage = createEncryptedMapping({
+    docId: "doc1",
+    sourceFileName: "fixture.txt",
+    entities: [manualEntity()],
+    credential: { method: "keyFile", keyFilePath }
+  });
+  const keyFileHash = crypto.createHash("sha256")
+    .update(await fs.readFile(keyFilePath))
+    .digest("hex");
+  assert.equal("keyFileHash" in mappingPackage.wrap.kdf, false);
+  assert.doesNotMatch(JSON.stringify(mappingPackage), new RegExp(keyFileHash));
+
+  const decrypted = decryptMappingPackage(mappingPackage, {
+    method: "keyFile",
+    keyFilePath
+  });
+  assert.equal(decrypted.entities[0].maskedValue, "<PERSON_001>");
+});
+
+test("sanitizes and restores txt without leaking original values", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.txt");
+  const sanitizedPath = path.join(tempDir, "fixture.sanitized.txt");
+  const restoredPath = path.join(tempDir, "fixture.restored.txt");
+  const entities = [manualEntity({ filePath: inputPath })];
+  await fs.writeFile(inputPath, "负责人李明，电话13800138000。", "utf8");
+
+  await sanitizeTextDocument({ filePath: inputPath, outputPath: sanitizedPath, entities });
+  const sanitized = await fs.readFile(sanitizedPath, "utf8");
+  assert.doesNotMatch(sanitized, /李明/);
+  assert.match(sanitized, /<PERSON_001>/);
+
+  await restoreTextDocument({ filePath: sanitizedPath, outputPath: restoredPath, entities });
+  assert.match(await fs.readFile(restoredPath, "utf8"), /李明/);
+});
+
+test("blocks sanitization when file changed after preview", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.txt");
+  await fs.writeFile(inputPath, "负责人李明", "utf8");
+
+  await assert.rejects(() => runSanitization({
+    files: [{ path: inputPath, docId: "stale-doc-id" }],
+    mode: "irreversible",
+    entities: [manualEntity({ docId: "stale-doc-id", filePath: inputPath })],
+    outputDir: tempDir
+  }), /文件内容已变化/);
+});
+
+test("blocks sanitization when same-size file content changes after preview", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.txt");
+  await fs.writeFile(inputPath, "负责人李明", "utf8");
+  const originalStat = await fs.stat(inputPath);
+  const summary = await summarizeFile(inputPath);
+
+  await fs.writeFile(inputPath, "负责人王五", "utf8");
+  await fs.utimes(inputPath, originalStat.atime, originalStat.mtime);
+  assert.equal((await fs.stat(inputPath)).size, originalStat.size);
+
+  await assert.rejects(() => runSanitization({
+    files: [{ path: inputPath, docId: summary.docId }],
+    mode: "irreversible",
+    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    outputDir: tempDir
+  }), /文件内容已变化/);
+});
+
+test("blocks direct export without preview or enabled entities", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.txt");
+  await fs.writeFile(inputPath, "负责人李明", "utf8");
+  const summary = await summarizeFile(inputPath);
+
+  await assert.rejects(() => runSanitization({
+    files: [{ path: inputPath }],
+    mode: "irreversible",
+    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    outputDir: tempDir
+  }), /请先预览识别实体/);
+
+  await assert.rejects(() => runSanitization({
+    files: [{ path: inputPath, docId: summary.docId }],
+    mode: "irreversible",
+    entities: [],
+    outputDir: tempDir
+  }), /未选择任何启用实体/);
+});
+
+test("rejects unapproved ipc paths before service execution", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.txt");
+  const keyFilePath = path.join(tempDir, "restore.key");
+  await fs.writeFile(inputPath, "负责人李明", "utf8");
+  await fs.writeFile(keyFilePath, "key material", "utf8");
+  const summary = await summarizeFile(inputPath);
+  const payload = {
+    files: [{ path: inputPath, docId: summary.docId }],
+    mode: "reversible",
+    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    outputDir: tempDir,
+    credential: { method: "keyFile", keyFilePath }
+  };
+
+  clearAuthorizationsForTest();
+  assert.throws(() => assertSanitizePayloadAuthorized(payload), (error) => {
+    return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
+  });
+
+  authorizeFilePaths([inputPath], "sanitize");
+  assert.throws(() => assertSanitizePayloadAuthorized(payload), /输出目录未通过目录选择器授权/);
+
+  authorizeOutputDirectory(tempDir);
+  assert.throws(() => assertSanitizePayloadAuthorized(payload), (error) => {
+    return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "keyFile";
+  });
+
+  authorizeFilePaths([keyFilePath], "keyFile");
+  assert.doesNotThrow(() => assertSanitizePayloadAuthorized(payload));
+
+  clearAuthorizationsForTest();
+  authorizeFilePaths([keyFilePath], "keyFile");
+  authorizeOutputDirectory(tempDir);
+  assert.throws(() => assertSanitizePayloadAuthorized({
+    ...payload,
+    files: [{ path: keyFilePath, docId: summary.docId }],
+    mode: "irreversible",
+    credential: undefined
+  }), (error) => error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize");
+  clearAuthorizationsForTest();
+});
+
+test("cleans reversible output when mapping credential fails", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.txt");
+  await fs.writeFile(inputPath, "负责人李明", "utf8");
+  const summary = await summarizeFile(inputPath);
+
+  await assert.rejects(() => runSanitization({
+    files: [{ path: inputPath, docId: summary.docId }],
+    mode: "reversible",
+    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    outputDir: tempDir,
+    credential: { method: "keyFile", keyFilePath: path.join(tempDir, "missing.key") }
+  }));
+
+  const outputNames = await fs.readdir(tempDir);
+  assert.deepEqual(outputNames.filter((name) => name.includes(".sanitized") || name.includes(".mapping.enc")), []);
+});
+
+test("cleans restored output when restore report write fails", async () => {
+  const tempDir = await makeTempDir();
+  const sanitizedPath = path.join(tempDir, "fixture.sanitized.txt");
+  const mappingPath = path.join(tempDir, "fixture.mapping.enc.json");
+  const credential = { method: "password", password: "restore-password" };
+  const entity = manualEntity({ docId: "doc1", filePath: sanitizedPath });
+  await fs.writeFile(sanitizedPath, "负责人<PERSON_001>", "utf8");
+  await fs.writeFile(mappingPath, JSON.stringify(createEncryptedMapping({
+    docId: "doc1",
+    sourceFileName: "fixture.txt",
+    entities: [entity],
+    credential
+  }), null, 2), "utf8");
+
+  const originalWriteFile = fs.writeFile;
+  fs.writeFile = async (filePath, ...args) => {
+    if (String(filePath).includes(".restore-report")) {
+      throw new Error("report write failed");
+    }
+    return originalWriteFile(filePath, ...args);
+  };
+
+  try {
+    await assert.rejects(() => runRestoration({
+      filePath: sanitizedPath,
+      mappingPath,
+      outputDir: tempDir,
+      credential
+    }), /report write failed/);
+  } finally {
+    fs.writeFile = originalWriteFile;
+  }
+
+  const outputNames = await fs.readdir(tempDir);
+  assert.deepEqual(outputNames.filter((name) => name.includes(".restored")), []);
+});
+
+test("uses safe output names and reports without source file name", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "李明身份证.txt");
+  await fs.writeFile(inputPath, "负责人李明", "utf8");
+  const summary = await summarizeFile(inputPath);
+
+  const result = await runSanitization({
+    files: [{ path: inputPath, docId: summary.docId }],
+    mode: "irreversible",
+    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    outputDir: tempDir
+  });
+
+  const outputs = result.results[0].outputs;
+  assert.doesNotMatch(path.basename(outputs.sanitizedFile), /李明|身份证/);
+  assert.doesNotMatch(path.basename(outputs.reportFile), /李明|身份证/);
+  const reportText = await fs.readFile(outputs.reportFile, "utf8");
+  assert.doesNotMatch(reportText, /李明|身份证/);
+  assert.match(reportText, new RegExp(`document-${summary.docId}`));
+});
+
+test("sanitizes docx text nodes", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.docx");
+  const outputPath = path.join(tempDir, "fixture.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>负责人李明</w:t></w:r></w:p></w:body></w:document>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  assert.match(extracted.textSegments[0].text, /李明/);
+
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
+  const sanitized = await extractDocxDocument(outputPath, "doc1");
+  assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("sanitizes docx field code text", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "field.docx");
+  const outputPath = path.join(tempDir, "field.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:instrText>HYPERLINK &quot;mailto:liming@example.com&quot;</w:instrText></w:r><w:r><w:t>邮箱链接</w:t></w:r></w:p></w:body></w:document>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  const entities = detectEntities([extracted]);
+  assert.ok(entities.some((entity) => entity.type === "email"));
+
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities });
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  assert.doesNotMatch(documentXml, /liming@example\.com/);
+  assert.match(documentXml, /EMAIL_001/);
+});
+
+test("blocks docx unhandled xml attributes without writing output", async () => {
+  const tempDir = await makeTempDir();
+  const bookmarkPath = path.join(tempDir, "bookmark.docx");
+  const bookmarkOutputPath = path.join(tempDir, "bookmark.sanitized.docx");
+  const bookmarkZip = new JSZip();
+  bookmarkZip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  bookmarkZip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:bookmarkStart w:id="0" w:name="李明"/><w:r><w:t>公开文本</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p></w:body></w:document>');
+  await fs.writeFile(bookmarkPath, await bookmarkZip.generateAsync({ type: "nodebuffer" }));
+
+  await assert.rejects(() => sanitizeDocxDocument({
+    filePath: bookmarkPath,
+    outputPath: bookmarkOutputPath,
+    entities: [manualEntity()]
+  }), /DOCX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(bookmarkOutputPath));
+
+  const stylePath = path.join(tempDir, "style.docx");
+  const styleOutputPath = path.join(tempDir, "style.sanitized.docx");
+  const styleZip = new JSZip();
+  styleZip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  styleZip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>公开文本</w:t></w:r></w:p></w:body></w:document>');
+  styleZip.file("word/styles.xml", '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="s1"><w:name w:val="李明"/></w:style></w:styles>');
+  await fs.writeFile(stylePath, await styleZip.generateAsync({ type: "nodebuffer" }));
+
+  await assert.rejects(() => sanitizeDocxDocument({
+    filePath: stylePath,
+    outputPath: styleOutputPath,
+    entities: [manualEntity()]
+  }), /DOCX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(styleOutputPath));
+});
+
+test("blocks docx unconfirmed structured values in any xml part", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "hidden-phone.docx");
+  const outputPath = path.join(tempDir, "hidden-phone.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>李明</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/styles.xml", '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="s1"><w:name w:val="13800138000"/></w:style></w:styles>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await assert.rejects(() => sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity()]
+  }), /DOCX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(outputPath));
+});
+
+test("sanitizes docx chart text and blocks custom xml", async () => {
+  const tempDir = await makeTempDir();
+  const chartPath = path.join(tempDir, "chart.docx");
+  const sanitizedChartPath = path.join(tempDir, "chart.sanitized.docx");
+  const chartZip = new JSZip();
+  chartZip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  chartZip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>');
+  chartZip.file("word/charts/chart1.xml", '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:v>李明</c:v></c:chartSpace>');
+  await fs.writeFile(chartPath, await chartZip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(chartPath, "doc1");
+  assert.match(extracted.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+  await sanitizeDocxDocument({ filePath: chartPath, outputPath: sanitizedChartPath, entities: [manualEntity()] });
+  const sanitized = await extractDocxDocument(sanitizedChartPath, "doc1");
+  assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+
+  const customPath = path.join(tempDir, "custom.docx");
+  const customZip = new JSZip();
+  customZip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  customZip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>');
+  customZip.file("customXml/item1.xml", "<root><name>李明</name></root>");
+  await fs.writeFile(customPath, await customZip.generateAsync({ type: "nodebuffer" }));
+  await assert.rejects(() => extractDocxDocument(customPath, "doc1"), /自定义 XML/);
+});
+
+test("sanitizes docx custom properties and settings docVars", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "metadata.docx");
+  const outputPath = path.join(tempDir, "metadata.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>');
+  zip.file("docProps/custom.xml", '<Properties xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property><vt:lpwstr>李明</vt:lpwstr></property></Properties>');
+  zip.file("word/settings.xml", '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docVars><w:docVar w:name="owner" w:val="李明"/></w:docVars></w:settings>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  assert.match(extracted.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const customXml = await sanitizedZip.file("docProps/custom.xml").async("text");
+  const settingsXml = await sanitizedZip.file("word/settings.xml").async("text");
+  assert.doesNotMatch(customXml, /李明/);
+  assert.doesNotMatch(settingsXml, /李明/);
+  assert.match(customXml, /PERSON_001/);
+  assert.match(settingsXml, /PERSON_001/);
+});
+
+test("sanitizes docx comment author attributes and people metadata", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "comments.docx");
+  const outputPath = path.join(tempDir, "comments.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>');
+  zip.file("word/comments.xml", '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="0" w:author="李明" w:initials="LM"><w:p><w:r><w:t>无敏感正文</w:t></w:r></w:p></w:comment></w:comments>');
+  zip.file("word/people.xml", '<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:person w15:author="李明"/></w15:people>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  assert.match(extracted.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const commentsXml = await sanitizedZip.file("word/comments.xml").async("text");
+  const peopleXml = await sanitizedZip.file("word/people.xml").async("text");
+  assert.doesNotMatch(commentsXml, /李明/);
+  assert.doesNotMatch(peopleXml, /李明/);
+  assert.match(commentsXml, /PERSON_001/);
+  assert.match(peopleXml, /PERSON_001/);
+});
+
+test("sanitizes docx external relationship targets", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "link.docx");
+  const outputPath = path.join(tempDir, "link.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>邮箱链接</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="mailto:liming@example.com" TargetMode="External"/></Relationships>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  const entities = detectEntities([extracted]);
+  assert.ok(entities.some((entity) => entity.type === "email"));
+
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities });
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const rels = await sanitizedZip.file("word/_rels/document.xml.rels").async("text");
+  assert.doesNotMatch(rels, /liming@example\.com/);
+  assert.match(rels, /EMAIL_001/);
+});
+
+test("sanitizes xlsx cell text", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.xlsx");
+  const outputPath = path.join(tempDir, "fixture.sanitized.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Sheet1");
+  worksheet.getCell("A1").value = "负责人李明";
+  await workbook.xlsx.writeFile(inputPath);
+
+  const extracted = await extractXlsxDocument(inputPath, "doc1");
+  assert.match(extracted.textSegments[0].text, /李明/);
+
+  await sanitizeXlsxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
+  const sanitized = await extractXlsxDocument(outputPath, "doc1");
+  assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("sanitizes xlsx worksheet names", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "sheet-name.xlsx");
+  const outputPath = path.join(tempDir, "sheet-name.sanitized.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet("李明");
+  await workbook.xlsx.writeFile(inputPath);
+
+  const extracted = await extractXlsxDocument(inputPath, "doc1");
+  assert.match(extracted.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+
+  await sanitizeXlsxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
+  const sanitizedWorkbook = new ExcelJS.Workbook();
+  await sanitizedWorkbook.xlsx.readFile(outputPath);
+  assert.equal(sanitizedWorkbook.worksheets[0].name, "<PERSON_001>");
+  const sanitized = await extractXlsxDocument(outputPath, "doc1");
+  assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("sanitizes xlsx headers and footers", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "header-footer.xlsx");
+  const outputPath = path.join(tempDir, "header-footer.sanitized.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Sheet1");
+  worksheet.headerFooter.oddHeader = "负责人李明";
+  worksheet.headerFooter.oddFooter = "电话13800138000";
+  await workbook.xlsx.writeFile(inputPath);
+
+  const extracted = await extractXlsxDocument(inputPath, "doc1");
+  const entities = detectEntities([extracted]);
+  entities.push(manualEntity({ filePath: inputPath }));
+
+  await sanitizeXlsxDocument({ filePath: inputPath, outputPath, entities });
+  const sanitizedWorkbook = new ExcelJS.Workbook();
+  await sanitizedWorkbook.xlsx.readFile(outputPath);
+  const sanitizedSheet = sanitizedWorkbook.worksheets[0];
+  assert.doesNotMatch(sanitizedSheet.headerFooter.oddHeader, /李明/);
+  assert.doesNotMatch(sanitizedSheet.headerFooter.oddFooter, /13800138000/);
+  assert.match(sanitizedSheet.headerFooter.oddHeader, /PERSON_001/);
+  assert.match(sanitizedSheet.headerFooter.oddFooter, /PHONE_001/);
+});
+
+test("blocks xlsx unconfirmed structured values in data validations", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "data-validation.xlsx");
+  const outputPath = path.join(tempDir, "data-validation.sanitized.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Sheet1");
+  worksheet.getCell("A1").value = "李明";
+  worksheet.getCell("B1").dataValidation = {
+    type: "list",
+    allowBlank: true,
+    formulae: ['"是,否"'],
+    showInputMessage: true,
+    promptTitle: "13800138000",
+    prompt: "13800138000"
+  };
+  await workbook.xlsx.writeFile(inputPath);
+
+  await assert.rejects(() => sanitizeXlsxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity()]
+  }), /XLSX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(outputPath));
+});
+
+test("detects and sanitizes numeric xlsx sensitive cells", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "numeric.xlsx");
+  const outputPath = path.join(tempDir, "numeric.sanitized.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Sheet1");
+  worksheet.getCell("A1").value = 13800138000;
+  await workbook.xlsx.writeFile(inputPath);
+
+  const extracted = await extractXlsxDocument(inputPath, "doc1");
+  const entities = detectEntities([extracted]);
+  assert.ok(entities.some((entity) => entity.type === "phone"));
+
+  await sanitizeXlsxDocument({ filePath: inputPath, outputPath, entities });
+  const sanitized = await extractXlsxDocument(outputPath, "doc1");
+  const text = sanitized.textSegments.map((segment) => segment.text).join("\n");
+  assert.doesNotMatch(text, /13800138000/);
+  assert.match(text, /<PHONE_001>/);
+});
+
+test("sanitizes text PDF by regenerating safe PDF", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.pdf");
+  const outputPath = path.join(tempDir, "fixture.sanitized.pdf");
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const page = pdfDoc.addPage();
+  page.drawText("Contact 13800138000 email liming@example.com", { x: 50, y: 700, size: 12, font });
+  await fs.writeFile(inputPath, await pdfDoc.save());
+
+  const extracted = await extractPdfDocument(inputPath, "doc1");
+  const entities = detectEntities([extracted]);
+  assert.ok(entities.length >= 2);
+
+  await sanitizePdfDocument({ filePath: inputPath, outputPath, entities });
+  const sanitized = await extractPdfDocument(outputPath, "doc1");
+  const text = sanitized.textSegments.map((segment) => segment.text).join("\n");
+  assert.doesNotMatch(text, /13800138000/);
+  assert.doesNotMatch(text, /liming@example\.com/);
+});
