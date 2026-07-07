@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>文档脱敏还原软件</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand-mark">文</div>
+          <div>
+            <strong>文档脱敏还原</strong>
+            <span>Desktop Console</span>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item active" type="button">工作台</button>
+          <button class="nav-item" type="button">任务记录</button>
+          <button class="nav-item" type="button">规则配置</button>
+          <button class="nav-item" type="button">系统设置</button>
+        </nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Electron 初始版</p>
+            <h1>文档处理工作台</h1>
+          </div>
+          <div class="version">v<span id="app-version">0.1.0</span></div>
+        </header>
+
+        <section class="toolbar" aria-label="处理模式">
+          <button class="mode-card active" type="button" data-mode="sanitize">
+            <span>脱敏处理</span>
+            <small>识别并替换敏感内容</small>
+          </button>
+          <button class="mode-card" type="button" data-mode="restore">
+            <span>还原处理</span>
+            <small>根据映射表恢复内容</small>
+          </button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>待处理文档</h2>
+              <p>选择本地文档后，下一步可接入脱敏、映射表和导出逻辑。</p>
+            </div>
+            <button id="select-files" class="primary-button" type="button">选择文档</button>
+          </div>
+
+          <div id="empty-state" class="empty-state">
+            <div class="empty-icon">+</div>
+            <h3>还没有选择文档</h3>
+            <p>支持 DOC、DOCX、PDF、TXT、MD、XLSX 等文件类型。</p>
+          </div>
+
+          <div id="file-list" class="file-list" hidden></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "document-sanitizer-restore",
+  "version": "0.1.0",
+  "description": "Electron initial version for document sanitization and restoration workflows.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "document",
+    "sanitizer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^43.0.0"
+  }
+}
