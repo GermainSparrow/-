@@ -20,7 +20,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
 import type {
   ApiResponse,
   Credential,
@@ -40,6 +40,9 @@ import type {
 } from "./types";
 
 type StatusTone = "info" | "success" | "warning" | "error";
+type DroppedFilesHandler = (files: File[]) => void | Promise<void>;
+
+const IMAGE_WARNING_MARKER = "图片内内容无法修改";
 
 interface StatusMessage {
   tone: StatusTone;
@@ -62,6 +65,7 @@ interface SanitizeState {
   results: SanitizeResultItem[];
   running: boolean;
   previewing: boolean;
+  imageContentAcknowledged: boolean;
 }
 
 interface RestoreState {
@@ -106,7 +110,8 @@ const INITIAL_SANITIZE_STATE: SanitizeState = {
   entities: [],
   results: [],
   running: false,
-  previewing: false
+  previewing: false,
+  imageContentAcknowledged: false
 };
 
 const INITIAL_RESTORE_STATE: RestoreState = {
@@ -217,8 +222,17 @@ export default function App() {
   }
 
   async function selectSanitizeFiles() {
+    await importSanitizeFiles((api) => api.importDocuments({ purpose: "sanitize", multi: false }));
+  }
+
+  async function dropSanitizeFiles(files: File[]) {
+    if (!validateDroppedDocxFiles(files)) return;
+    await importSanitizeFiles((api) => api.importDroppedDocuments({ purpose: "sanitize", files }));
+  }
+
+  async function importSanitizeFiles(loader: (api: DesktopApi) => Promise<ApiResponse<DocumentSummary[]>>) {
     try {
-      const files = await callDesktop((api) => api.importDocuments({ purpose: "sanitize", multi: false }));
+      const files = await callDesktop(loader);
       if (!files.length) return;
 
       setSanitize((current) => ({
@@ -227,7 +241,8 @@ export default function App() {
         files,
         preview: null,
         entities: [],
-        results: []
+        results: [],
+        imageContentAcknowledged: false
       }));
       setStatus({
         tone: "info",
@@ -245,7 +260,8 @@ export default function App() {
       inputKind,
       preview: null,
       entities: [],
-      results: []
+      results: [],
+      imageContentAcknowledged: false
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
   }
@@ -257,7 +273,8 @@ export default function App() {
       pastedText,
       preview: null,
       entities: [],
-      results: []
+      results: [],
+      imageContentAcknowledged: false
     }));
   }
 
@@ -268,7 +285,8 @@ export default function App() {
       pastedText: "",
       preview: null,
       entities: [],
-      results: []
+      results: [],
+      imageContentAcknowledged: false
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
   }
@@ -325,7 +343,8 @@ export default function App() {
           : current.files,
         preview,
         entities: preview.entities,
-        previewing: false
+        previewing: false,
+        imageContentAcknowledged: false
       }));
 
       if (preview.blocked.length) {
@@ -437,6 +456,14 @@ export default function App() {
       setStatus({ tone: "error", title: "请选择输出目录" });
       return;
     }
+    if (requiresImageAcknowledgement(sanitize.preview) && !sanitize.imageContentAcknowledged) {
+      setStatus({
+        tone: "warning",
+        title: "请先确认图片风险",
+        body: "图片内内容不会被修改，请确认图片中不包含需要脱敏的敏感信息后继续。"
+      });
+      return;
+    }
 
     const enabledEntities = sanitize.entities
       .filter((entity) => entity.enabled)
@@ -470,7 +497,10 @@ export default function App() {
           mode: sanitize.mode,
           entities: enabledEntities,
           outputDir: sanitize.outputDir,
-          credential
+          credential,
+          acknowledgements: {
+            imageContentUnmodified: sanitize.imageContentAcknowledged
+          }
         })
       );
 
@@ -491,8 +521,17 @@ export default function App() {
   }
 
   async function selectRestoreFile() {
+    await importRestoreFile((api) => api.importDocuments({ purpose: "restore", multi: false }));
+  }
+
+  async function dropRestoreFile(files: File[]) {
+    if (!validateDroppedDocxFiles(files)) return;
+    await importRestoreFile((api) => api.importDroppedDocuments({ purpose: "restore", files }));
+  }
+
+  async function importRestoreFile(loader: (api: DesktopApi) => Promise<ApiResponse<DocumentSummary[]>>) {
     try {
-      const files = await callDesktop((api) => api.importDocuments({ purpose: "restore", multi: false }));
+      const files = await callDesktop(loader);
       if (!files.length) return;
 
       setRestore((current) => ({
@@ -505,6 +544,21 @@ export default function App() {
     } catch (error) {
       setStatus(errorStatus(error));
     }
+  }
+
+  function validateDroppedDocxFiles(files: File[]) {
+    if (files.length !== 1) {
+      setStatus({ tone: "error", title: "每次只能拖入一个 DOCX 文件" });
+      return false;
+    }
+
+    const fileName = files[0]?.name || "";
+    if (!fileName.toLowerCase().endsWith(".docx")) {
+      setStatus({ tone: "error", title: "仅支持拖入 DOCX 文件", body: "旧版 DOC 请另存为 DOCX 后处理。" });
+      return false;
+    }
+
+    return true;
   }
 
   function changeRestoreInputKind(inputKind: InputSourceKind) {
@@ -680,6 +734,7 @@ export default function App() {
               onTextChange={changeSanitizeText}
               onClearText={clearSanitizeText}
               onSelectFiles={selectSanitizeFiles}
+              onDropFiles={dropSanitizeFiles}
               onPreview={previewEntities}
               onSelectOutput={selectSanitizeOutput}
               onSelectKeyFile={selectSanitizeKeyFile}
@@ -693,6 +748,9 @@ export default function App() {
               onEntityChange={updateEntity}
               onEntityTypeChange={updateEntityType}
               onRemoveEntity={removeEntity}
+              onImageAckChange={(imageContentAcknowledged) =>
+                setSanitize((current) => ({ ...current, imageContentAcknowledged }))
+              }
             />
           )}
 
@@ -704,6 +762,7 @@ export default function App() {
               onTextChange={changeRestoreText}
               onClearText={clearRestoreText}
               onSelectFile={selectRestoreFile}
+              onDropFile={dropRestoreFile}
               onSelectMappingFile={selectMappingFile}
               onSelectOutput={selectRestoreOutput}
               onSelectKeyFile={selectRestoreKeyFile}
@@ -941,6 +1000,7 @@ function SanitizeWorkflow({
   onTextChange,
   onClearText,
   onSelectFiles,
+  onDropFiles,
   onPreview,
   onSelectOutput,
   onSelectKeyFile,
@@ -951,7 +1011,8 @@ function SanitizeWorkflow({
   onAddManualEntity,
   onEntityChange,
   onEntityTypeChange,
-  onRemoveEntity
+  onRemoveEntity,
+  onImageAckChange
 }: {
   state: SanitizeState;
   step: number;
@@ -962,6 +1023,7 @@ function SanitizeWorkflow({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFiles: () => void;
+  onDropFiles: DroppedFilesHandler;
   onPreview: () => void;
   onSelectOutput: () => void;
   onSelectKeyFile: () => void;
@@ -973,10 +1035,12 @@ function SanitizeWorkflow({
   onEntityChange: (index: number, patch: Partial<EntityItem>) => void;
   onEntityTypeChange: (index: number, type: string) => void;
   onRemoveEntity: (index: number) => void;
+  onImageAckChange: (checked: boolean) => void;
 }) {
   const enabledCount = state.entities.filter((entity) => entity.enabled).length;
   const hasInput = state.inputKind === "word" ? state.files.length > 0 : state.pastedText.trim().length > 0;
   const canAddManualEntity = Boolean(state.preview?.files[0]?.docId);
+  const imageAckRequired = requiresImageAcknowledgement(state.preview);
 
   return (
     <div className="space-y-6">
@@ -1002,6 +1066,7 @@ function SanitizeWorkflow({
               onTextChange={onTextChange}
               onClearText={onClearText}
               onSelectFiles={onSelectFiles}
+              onDropFiles={onDropFiles}
             />
           </Panel>
 
@@ -1047,6 +1112,13 @@ function SanitizeWorkflow({
 
               <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
 
+              {imageAckRequired ? (
+                <ImageAcknowledgement
+                  checked={state.imageContentAcknowledged}
+                  onChange={onImageAckChange}
+                />
+              ) : null}
+
               <div className="rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-on-surface-muted">启用实体</span>
@@ -1060,7 +1132,7 @@ function SanitizeWorkflow({
                 </div>
               </div>
 
-              <Button icon={FileCheck2} block onClick={onRun} disabled={state.running}>
+              <Button icon={FileCheck2} block onClick={onRun} disabled={state.running || (imageAckRequired && !state.imageContentAcknowledged)}>
                 {state.running ? "处理中" : "执行脱敏"}
               </Button>
             </div>
@@ -1090,6 +1162,7 @@ function RestoreWorkflow({
   onTextChange,
   onClearText,
   onSelectFile,
+  onDropFile,
   onSelectMappingFile,
   onSelectOutput,
   onSelectKeyFile,
@@ -1103,6 +1176,7 @@ function RestoreWorkflow({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFile: () => void;
+  onDropFile: DroppedFilesHandler;
   onSelectMappingFile: () => void;
   onSelectOutput: () => void;
   onSelectKeyFile: () => void;
@@ -1129,6 +1203,7 @@ function RestoreWorkflow({
               onTextChange={onTextChange}
               onClearText={onClearText}
               onSelectFile={onSelectFile}
+              onDropFile={onDropFile}
             />
             <div className="mt-3">
               <FilePickCard
@@ -1328,7 +1403,8 @@ function InputSourcePanel({
   onInputKindChange,
   onTextChange,
   onClearText,
-  onSelectFiles
+  onSelectFiles,
+  onDropFiles
 }: {
   inputKind: InputSourceKind;
   files: DocumentSummary[];
@@ -1338,6 +1414,7 @@ function InputSourcePanel({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFiles: () => void;
+  onDropFiles: DroppedFilesHandler;
 }) {
   return (
     <div className="space-y-4">
@@ -1351,16 +1428,13 @@ function InputSourcePanel({
       />
 
       {inputKind === "word" ? (
-        <div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-on-surface">支持 Word DOCX</p>
-              <p className="mt-1 text-xs text-on-surface-muted">旧版 DOC 请另存为 DOCX 后处理。</p>
-            </div>
-            <Button icon={FolderOpen} onClick={onSelectFiles}>
-              选择 DOCX
-            </Button>
-          </div>
+        <div className="space-y-3">
+          <DocxUploadBox
+            title="拖拽 DOCX 到此处，或点击上传"
+            description="支持 Word DOCX。旧版 DOC 请另存为 DOCX 后处理。"
+            onSelect={onSelectFiles}
+            onDropFiles={onDropFiles}
+          />
           <FileList files={files} preview={preview} />
         </div>
       ) : (
@@ -1382,7 +1456,8 @@ function RestoreInputPanel({
   onInputKindChange,
   onTextChange,
   onClearText,
-  onSelectFile
+  onSelectFile,
+  onDropFile
 }: {
   inputKind: InputSourceKind;
   file: DocumentSummary | null;
@@ -1391,6 +1466,7 @@ function RestoreInputPanel({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFile: () => void;
+  onDropFile: DroppedFilesHandler;
 }) {
   return (
     <div className="space-y-4">
@@ -1404,13 +1480,15 @@ function RestoreInputPanel({
       />
 
       {inputKind === "word" ? (
-        <FilePickCard
-          icon={FileText}
-          title="脱敏 DOCX"
-          file={file}
-          buttonLabel="选择 DOCX"
-          onSelect={onSelectFile}
-        />
+        <div className="space-y-3">
+          <DocxUploadBox
+            title="拖拽 DOCX 到此处，或点击上传"
+            description="选择需要按映射还原的 DOCX 文件。"
+            onSelect={onSelectFile}
+            onDropFiles={onDropFile}
+          />
+          <SelectedDocxFile file={file} />
+        </div>
       ) : (
         <TextInputArea
           value={pastedText}
@@ -1471,9 +1549,123 @@ function TextResult({ title, value }: { title: string; value: string }) {
   );
 }
 
+function DocxUploadBox({
+  title,
+  description,
+  onSelect,
+  onDropFiles
+}: {
+  title: string;
+  description: string;
+  onSelect: () => void;
+  onDropFiles: DroppedFilesHandler;
+}) {
+  const [dragging, setDragging] = useState(false);
+
+  function handleDrag(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    if (event.type === "dragenter" || event.type === "dragover") {
+      setDragging(true);
+    }
+    if (event.type === "dragleave") {
+      setDragging(false);
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setDragging(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length) {
+      void onDropFiles(files);
+    }
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      onDragEnter={handleDrag}
+      onDragOver={handleDrag}
+      onDragLeave={handleDrag}
+      onDrop={handleDrop}
+      className={cn(
+        "flex min-h-[148px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-4 py-8 text-center transition",
+        dragging
+          ? "border-primary bg-primary-muted text-primary"
+          : "border-border-strong bg-surface-muted text-on-surface-muted hover:border-primary hover:bg-primary-muted/45"
+      )}
+    >
+      <UploadCloud size={28} className={dragging ? "text-primary" : "text-on-surface-muted"} />
+      <p className="mt-3 text-sm font-bold text-on-surface">{title}</p>
+      <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-muted">{description}</p>
+      <div className="mt-4">
+        <span className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-semibold text-on-surface">
+          <FolderOpen size={16} />
+          上传 DOCX
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SelectedDocxFile({ file }: { file: DocumentSummary | null }) {
+  if (!file) {
+    return <EmptyState icon={UploadCloud} title="尚未上传文件" body="拖拽 DOCX 到上传窗口，或点击上传。" />;
+  }
+
+  return (
+    <div className="grid grid-cols-[54px_1fr] items-center gap-3 rounded-lg border border-border bg-surface-muted px-3 py-3">
+      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-surface font-mono text-[11px] font-bold text-primary">
+        {file.extension}
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-semibold text-on-surface">{file.name}</p>
+          <span className="font-mono text-[11px] text-on-surface-muted">{formatBytes(file.size)}</span>
+        </div>
+        <p className="mt-1 truncate font-mono text-[11px] text-on-surface-muted" title={file.path}>
+          {file.path}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ImageAcknowledgement({
+  checked,
+  onChange
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start gap-3 rounded-lg border border-warning/25 bg-warning-muted px-3 py-3 text-sm text-warning">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="mt-0.5 h-4 w-4 shrink-0 accent-warning"
+      />
+      <span>我已知晓图片内内容不会被修改，并确认可继续导出。</span>
+    </label>
+  );
+}
+
 function FileList({ files, preview }: { files: DocumentSummary[]; preview: PreviewResult | null }) {
   if (!files.length) {
-    return <EmptyState icon={UploadCloud} title="尚未选择文件" body="使用系统文件选择器导入文档。" />;
+    return <EmptyState icon={UploadCloud} title="尚未上传文件" body="拖拽 DOCX 到上传窗口，或点击上传。" />;
   }
 
   const blockedByPath = new Map(preview?.blocked.map((item) => [item.path, item]) ?? []);
@@ -1998,6 +2190,12 @@ function formatBytes(size: number) {
 
 function fileNameFromPath(filePath: string) {
   return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function requiresImageAcknowledgement(preview: PreviewResult | null) {
+  return Boolean(preview?.files.some((file) =>
+    file.warnings.some((warning) => warning.includes(IMAGE_WARNING_MARKER))
+  ));
 }
 
 function formatApiError(error: ApiResponse<unknown>["error"]) {

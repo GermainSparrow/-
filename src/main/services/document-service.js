@@ -81,7 +81,7 @@ async function createUniqueOutputPath(inputPath, outputDir, suffix, extensionOve
   return candidate;
 }
 
-async function sanitizeDocument({ filePath, outputDir, entities, outputStem = null }) {
+async function sanitizeDocument({ filePath, outputDir, entities, outputStem = null, acknowledgements = {} }) {
   assertSupported(filePath);
   const outputPath = await createUniqueOutputPath(
     filePath,
@@ -91,7 +91,7 @@ async function sanitizeDocument({ filePath, outputDir, entities, outputStem = nu
     outputStem
   );
 
-  const result = await sanitizeDocxDocument({ filePath, outputPath, entities });
+  const result = await sanitizeDocxDocument({ filePath, outputPath, entities, acknowledgements });
 
   return {
     outputPath,
@@ -118,6 +118,7 @@ async function restoreDocument({ filePath, outputDir, entities, outputStem = nul
 }
 
 module.exports = {
+  assertSupported,
   createUniqueOutputPath,
   extractDocument,
   restoreDocument,

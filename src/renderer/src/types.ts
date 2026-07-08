@@ -131,6 +131,10 @@ export interface DesktopApi {
     purpose: "sanitize" | "restore" | "mapping" | "keyFile";
     multi?: boolean;
   }) => Promise<ApiResponse<DocumentSummary[]>>;
+  importDroppedDocuments: (options: {
+    purpose: "sanitize" | "restore";
+    files: File[];
+  }) => Promise<ApiResponse<DocumentSummary[]>>;
   previewSanitize: (payload: {
     source: SanitizeSource;
   }) => Promise<ApiResponse<PreviewResult>>;
@@ -140,6 +144,9 @@ export interface DesktopApi {
     entities: EntityItem[];
     outputDir: string;
     credential?: Credential;
+    acknowledgements?: {
+      imageContentUnmodified?: boolean;
+    };
   }) => Promise<ApiResponse<SanitizeResult>>;
   selectOutputDirectory: () => Promise<ApiResponse<string | null>>;
   unlockMapping: (payload: {

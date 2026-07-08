@@ -165,13 +165,14 @@ async function sanitizeTextSource({ text, outputDir, entities, outputStem }) {
   };
 }
 
-async function sanitizeSource({ source, outputDir, entities, outputStem }) {
+async function sanitizeSource({ source, outputDir, entities, outputStem, acknowledgements = {} }) {
   if (source.kind === "word") {
     return sanitizeDocument({
       filePath: source.path,
       outputDir,
       entities,
-      outputStem
+      outputStem,
+      acknowledgements
     });
   }
 
@@ -183,7 +184,7 @@ async function sanitizeSource({ source, outputDir, entities, outputStem }) {
   });
 }
 
-async function runSanitization({ source, mode, entities, outputDir, credential }) {
+async function runSanitization({ source, mode, entities, outputDir, credential, acknowledgements = {} }) {
   const writtenPaths = [];
 
   try {
@@ -225,7 +226,8 @@ async function runSanitization({ source, mode, entities, outputDir, credential }
       source,
       outputDir,
       entities: docEntities,
-      outputStem
+      outputStem,
+      acknowledgements
     });
     writtenPaths.push(sanitizeResult.outputPath);
 

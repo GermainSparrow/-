@@ -24,6 +24,15 @@ const documentImportSchema = z.object({
   multi: z.boolean().default(false)
 }).default({});
 
+const droppedDocumentImportSchema = z.object({
+  purpose: z.enum(["sanitize", "restore"]),
+  filePaths: z.array(z.string().min(1)).min(1).max(1)
+});
+
+const acknowledgementSchema = z.object({
+  imageContentUnmodified: z.boolean().optional().default(false)
+}).default({});
+
 const wordSourceSchema = z.object({
   kind: z.literal("word"),
   path: z.string().min(1),
@@ -61,7 +70,8 @@ const sanitizeRunSchema = z.object({
   mode: z.enum(["irreversible", "reversible"]),
   entities: z.array(entitySchema),
   outputDir: z.string().min(1),
-  credential: credentialSchema.optional()
+  credential: credentialSchema.optional(),
+  acknowledgements: acknowledgementSchema
 }).superRefine((value, context) => {
   if (value.mode === "reversible" && !value.credential) {
     context.addIssue({
@@ -103,6 +113,7 @@ function parseWithSchema(schema, payload) {
 
 module.exports = {
   documentImportSchema,
+  droppedDocumentImportSchema,
   previewSchema,
   sanitizeRunSchema,
   unlockMappingSchema,

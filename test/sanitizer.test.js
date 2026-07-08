@@ -19,6 +19,7 @@ const {
 } = require("../src/main/services/crypto-service");
 const {
   extractDocxDocument,
+  restoreDocxDocument,
   sanitizeDocxDocument
 } = require("../src/main/services/docx-processor");
 const {
@@ -41,6 +42,7 @@ const {
   runSanitization
 } = require("../src/main/services/sanitizer-service");
 const {
+  assertSupported,
   summarizeFile
 } = require("../src/main/services/document-service");
 const {
@@ -51,6 +53,10 @@ const {
   authorizeOutputDirectory,
   clearAuthorizationsForTest
 } = require("../src/main/services/path-authorization-service");
+const {
+  droppedDocumentImportSchema,
+  parseWithSchema
+} = require("../src/main/services/schemas");
 
 async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), "sanitizer-test-"));
@@ -404,6 +410,28 @@ test("blocks unsupported file types through source preview", async () => {
   }
 });
 
+test("validates dropped docx import payloads", () => {
+  const parsed = parseWithSchema(droppedDocumentImportSchema, {
+    purpose: "sanitize",
+    filePaths: ["D:/work/fixture.docx"]
+  });
+  assert.deepEqual(parsed, {
+    purpose: "sanitize",
+    filePaths: ["D:/work/fixture.docx"]
+  });
+
+  assert.throws(() => parseWithSchema(droppedDocumentImportSchema, {
+    purpose: "sanitize",
+    filePaths: ["D:/work/one.docx", "D:/work/two.docx"]
+  }), /参数校验失败/);
+  assert.throws(() => parseWithSchema(droppedDocumentImportSchema, {
+    purpose: "mapping",
+    filePaths: ["D:/work/fixture.docx"]
+  }), /参数校验失败/);
+  assert.doesNotThrow(() => assertSupported("D:/work/fixture.docx"));
+  assert.throws(() => assertSupported("D:/work/fixture.pdf"), /仅支持 Word DOCX 文件/);
+});
+
 test("previews sanitizes and restores pasted text", async () => {
   const tempDir = await makeTempDir();
   const text = "负责人李明，电话13800138000，邮箱liming@example.com，账号6222021234567890123。";
@@ -460,6 +488,45 @@ test("sanitizes docx text nodes", async () => {
 
   await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
   const sanitized = await extractDocxDocument(outputPath, "doc1");
+  assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("previews docx images but requires acknowledgement before sanitization", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "image.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>负责人李明</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/media/image1.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const preview = await previewSanitization({ kind: "word", path: inputPath });
+  assert.equal(preview.blocked.length, 0);
+  assert.ok(preview.files[0].warnings.some((warning) => warning.includes("图片内内容无法修改")));
+
+  const docId = preview.files[0].docId;
+  const entity = manualEntity({ docId, filePath: inputPath });
+  await assert.rejects(() => runSanitization({
+    source: { kind: "word", path: inputPath, docId },
+    mode: "irreversible",
+    entities: [entity],
+    outputDir: tempDir
+  }), (error) => error.code === "DOCX_IMAGE_ACK_REQUIRED");
+  assert.deepEqual((await fs.readdir(tempDir)).filter((name) => name.includes(".sanitized")), []);
+
+  const result = await runSanitization({
+    source: { kind: "word", path: inputPath, docId },
+    mode: "irreversible",
+    entities: [entity],
+    outputDir: tempDir,
+    acknowledgements: { imageContentUnmodified: true }
+  });
+  const item = result.results[0];
+  assert.ok(item.warnings.some((warning) => warning.includes("图片内内容无法修改")));
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(item.outputs.sanitizedFile));
+  assert.ok(sanitizedZip.file("word/media/image1.png"));
+  const sanitized = await extractDocxDocument(item.outputs.sanitizedFile, "verify");
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 });
 
@@ -533,7 +600,7 @@ test("blocks docx unconfirmed structured values in any xml part", async () => {
   await assert.rejects(() => fs.access(outputPath));
 });
 
-test("sanitizes docx chart text and blocks custom xml", async () => {
+test("sanitizes docx chart text", async () => {
   const tempDir = await makeTempDir();
   const chartPath = path.join(tempDir, "chart.docx");
   const sanitizedChartPath = path.join(tempDir, "chart.sanitized.docx");
@@ -548,14 +615,91 @@ test("sanitizes docx chart text and blocks custom xml", async () => {
   await sanitizeDocxDocument({ filePath: chartPath, outputPath: sanitizedChartPath, entities: [manualEntity()] });
   const sanitized = await extractDocxDocument(sanitizedChartPath, "doc1");
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
 
+test("sanitizes and restores docx custom xml text and attributes", async () => {
+  const tempDir = await makeTempDir();
   const customPath = path.join(tempDir, "custom.docx");
+  const sanitizedCustomPath = path.join(tempDir, "custom.sanitized.docx");
+  const restoredCustomPath = path.join(tempDir, "custom.restored.docx");
   const customZip = new JSZip();
   customZip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
   customZip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>');
-  customZip.file("customXml/item1.xml", "<root><name>李明</name></root>");
+  customZip.file("customXml/item1.xml", '<root xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="text" owner="李明" phone="13800138000"><name>李明</name><note><![CDATA[邮箱 liming@example.com]]></note><!--账号 6222021234567890123--></root>');
   await fs.writeFile(customPath, await customZip.generateAsync({ type: "nodebuffer" }));
-  await assert.rejects(() => extractDocxDocument(customPath, "doc1"), /自定义 XML/);
+
+  const extracted = await extractDocxDocument(customPath, "doc1");
+  const extractedText = extracted.textSegments.map((segment) => segment.text).join("\n");
+  assert.match(extractedText, /李明/);
+  assert.match(extractedText, /13800138000/);
+  assert.match(extractedText, /liming@example\.com/);
+  assert.match(extractedText, /6222021234567890123/);
+  assert.ok(extracted.warnings.some((warning) => warning.includes("自定义 XML")));
+
+  const entities = detectEntities([extracted]);
+  entities.push(manualEntity({ filePath: customPath }));
+  await sanitizeDocxDocument({ filePath: customPath, outputPath: sanitizedCustomPath, entities });
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(sanitizedCustomPath));
+  const customXml = await sanitizedZip.file("customXml/item1.xml").async("text");
+  assert.doesNotMatch(customXml, /李明|13800138000|liming@example\.com|6222021234567890123/);
+  assert.match(customXml, /PERSON_001/);
+  assert.match(customXml, /PHONE_001/);
+  assert.match(customXml, /EMAIL_001/);
+  assert.match(customXml, /ACCOUNT_001/);
+  assert.match(customXml, /xsi:type="text"/);
+
+  await restoreDocxDocument({ filePath: sanitizedCustomPath, outputPath: restoredCustomPath, entities });
+  const restoredZip = await JSZip.loadAsync(await fs.readFile(restoredCustomPath));
+  const restoredCustomXml = await restoredZip.file("customXml/item1.xml").async("text");
+  assert.match(restoredCustomXml, /李明/);
+  assert.match(restoredCustomXml, /13800138000/);
+  assert.match(restoredCustomXml, /liming@example\.com/);
+  assert.match(restoredCustomXml, /6222021234567890123/);
+});
+
+test("blocks unconfirmed structured values in docx custom xml", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "custom-hidden-phone.docx");
+  const outputPath = path.join(tempDir, "custom-hidden-phone.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>李明</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("customXml/item1.xml", '<root><phone>13800138000</phone></root>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await assert.rejects(() => sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity()]
+  }), /DOCX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(outputPath));
+});
+
+test("blocks rather than rewriting docx custom xml item properties", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "custom-item-props.docx");
+  const outputPath = path.join(tempDir, "custom-item-props.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>公开文本</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("customXml/itemProps1.xml", '<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="13800138000"/>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  assert.doesNotMatch(extracted.textSegments.map((segment) => segment.text).join("\n"), /13800138000/);
+
+  await assert.rejects(() => sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity({
+      type: "phone",
+      originalValue: "13800138000",
+      maskedValue: "<PHONE_001>",
+      stableId: "PHONE_001"
+    })]
+  }), /DOCX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(outputPath));
 });
 
 test("sanitizes docx custom properties and settings docVars", async () => {

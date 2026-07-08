@@ -3,10 +3,22 @@ const path = require("node:path");
 const JSZip = require("jszip");
 const { AppError } = require("./app-error");
 const { applyRestoration, applySanitization, detectStructuredValues, findOriginalLeaks } = require("./entity-service");
-const { collectXmlText, decodeXml, encodeXml, transformXmlText } = require("./xml-utils");
+const { collectGenericXmlText, collectXmlText, decodeXml, encodeXml, transformGenericXmlText, transformXmlText } = require("./xml-utils");
+
+const CUSTOM_XML_WARNING = "Word 文档包含自定义 XML，已纳入脱敏/还原处理；如文档依赖表单绑定或第三方系统数据，请复核输出文件。";
+const IMAGE_CONTENT_WARNING = "Word 文档包含图片，图片内内容无法修改；请确认图片中不包含需要脱敏的敏感信息后继续。";
+
+function isCustomXmlPath(fileName) {
+  return /^customXml\/(?!_rels\/)(?!itemProps\d*\.xml$).*\.xml$/.test(fileName);
+}
+
+function isCustomXmlPropertiesPath(fileName) {
+  return /^customXml\/itemProps\d*\.xml$/.test(fileName);
+}
 
 function isProcessableXmlPath(fileName) {
   return (
+    isCustomXmlPath(fileName) ||
     fileName === "word/document.xml" ||
     /^word\/header\d+\.xml$/.test(fileName) ||
     /^word\/footer\d+\.xml$/.test(fileName) ||
@@ -30,6 +42,7 @@ function isIgnoredXmlPath(fileName) {
   return (
     fileName === "[Content_Types].xml" ||
     fileName === "word/styles.xml" ||
+    isCustomXmlPropertiesPath(fileName) ||
     fileName === "word/numbering.xml" ||
     fileName === "word/fontTable.xml" ||
     fileName === "word/webSettings.xml" ||
@@ -44,12 +57,16 @@ function isRelationshipPath(fileName) {
   return fileName.endsWith(".rels");
 }
 
+function hasDocxImages(fileNames) {
+  return fileNames.some((name) => name.startsWith("word/media/"));
+}
+
 function inspectDocxZip(zip) {
   const warnings = [];
   const fileNames = Object.keys(zip.files);
 
-  if (fileNames.some((name) => name.startsWith("word/media/"))) {
-    throw new AppError("BLOCKED_UNCONFIRMED_CONTENT", "Word 文档包含图片，第一版无法确认图片内是否包含敏感信息");
+  if (hasDocxImages(fileNames)) {
+    warnings.push(IMAGE_CONTENT_WARNING);
   }
 
   if (fileNames.some((name) => name.startsWith("word/embeddings/"))) {
@@ -60,8 +77,8 @@ function inspectDocxZip(zip) {
     throw new AppError("BLOCKED_UNCONFIRMED_CONTENT", "Word 文档包含宏，第一版无法可靠脱敏");
   }
 
-  if (fileNames.some((name) => name.startsWith("customXml/") && name.endsWith(".xml"))) {
-    throw new AppError("BLOCKED_UNCONFIRMED_CONTENT", "Word 文档包含自定义 XML，第一版无法可靠确认其中是否包含敏感信息");
+  if (fileNames.some(isCustomXmlPath)) {
+    warnings.push(CUSTOM_XML_WARNING);
   }
 
   return warnings;
@@ -133,6 +150,10 @@ function transformTextAttributes(xml, tagPattern, attributeNames, transform) {
 }
 
 function collectDocxText(fileName, xml) {
+  if (isCustomXmlPath(fileName)) {
+    return collectGenericXmlText(xml);
+  }
+
   const texts = collectXmlText(xml);
   if (fileName === "word/settings.xml") {
     texts.push(...collectTextAttributes(xml, /<(?:[A-Za-z_][\w.-]*:)?docVar\b[^>]*>/g, ["name", "val"]));
@@ -147,6 +168,10 @@ function collectDocxText(fileName, xml) {
 }
 
 function transformDocxText(fileName, xml, transform) {
+  if (isCustomXmlPath(fileName)) {
+    return transformGenericXmlText(xml, transform);
+  }
+
   let transformedXml = transformXmlText(xml, transform);
   if (fileName === "word/settings.xml") {
     transformedXml = transformTextAttributes(
@@ -262,9 +287,13 @@ async function extractDocxDocument(filePath, docId) {
   };
 }
 
-async function transformDocxFile({ filePath, outputPath, entities, mode }) {
+async function transformDocxFile({ filePath, outputPath, entities, mode, acknowledgements = {} }) {
   const zip = await loadZip(filePath);
   const warnings = inspectDocxZip(zip);
+  if (mode !== "restore" && hasDocxImages(Object.keys(zip.files)) && !acknowledgements.imageContentUnmodified) {
+    throw new AppError("DOCX_IMAGE_ACK_REQUIRED", IMAGE_CONTENT_WARNING);
+  }
+
   const transform = mode === "restore"
     ? (text) => applyRestoration(text, entities)
     : (text) => applySanitization(text, entities);

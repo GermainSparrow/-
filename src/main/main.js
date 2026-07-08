@@ -2,6 +2,7 @@ const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const {
   documentImportSchema,
+  droppedDocumentImportSchema,
   parseWithSchema,
   previewSchema,
   restoreRunSchema,
@@ -10,7 +11,7 @@ const {
 } = require("./services/schemas");
 const { runSafely } = require("./services/response");
 const { previewSanitization, runRestoration, runSanitization, unlockMapping } = require("./services/sanitizer-service");
-const { summarizeFile } = require("./services/document-service");
+const { assertSupported, summarizeFile } = require("./services/document-service");
 const {
   assertPreviewPayloadAuthorized,
   assertRestorePayloadAuthorized,
@@ -61,6 +62,16 @@ app.whenReady().then(() => {
 
     authorizeFilePaths(result.filePaths, options.purpose);
     return Promise.all(result.filePaths.map((filePath) => summarizeFile(filePath)));
+  }));
+
+  ipcMain.handle("document:import-dropped", async (_event, payload) => runSafely(async () => {
+    const options = parseWithSchema(droppedDocumentImportSchema, payload);
+    for (const filePath of options.filePaths) {
+      assertSupported(filePath);
+    }
+
+    authorizeFilePaths(options.filePaths, options.purpose);
+    return Promise.all(options.filePaths.map((filePath) => summarizeFile(filePath)));
   }));
 
   ipcMain.handle("output:select-directory", async () => runSafely(async () => {
