@@ -34,6 +34,9 @@ const {
   sanitizeTextDocument
 } = require("../src/main/services/text-processor");
 const {
+  clearPreviewedSourcesForTest,
+  createTextDocId,
+  previewSanitization,
   runRestoration,
   runSanitization
 } = require("../src/main/services/sanitizer-service");
@@ -41,6 +44,8 @@ const {
   summarizeFile
 } = require("../src/main/services/document-service");
 const {
+  assertPreviewPayloadAuthorized,
+  assertRestorePayloadAuthorized,
   assertSanitizePayloadAuthorized,
   authorizeFilePaths,
   authorizeOutputDirectory,
@@ -66,6 +71,13 @@ function manualEntity(overrides = {}) {
     source: "manual",
     ...overrides
   };
+}
+
+async function writeDocxWithText(filePath, text) {
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`);
+  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer" }));
 }
 
 test("detects structured entities and replaces longer strings first", () => {
@@ -157,75 +169,84 @@ test("sanitizes and restores txt without leaking original values", async () => {
   assert.match(await fs.readFile(restoredPath, "utf8"), /李明/);
 });
 
-test("blocks sanitization when file changed after preview", async () => {
+test("blocks sanitization when pasted text changed after preview", async () => {
   const tempDir = await makeTempDir();
-  const inputPath = path.join(tempDir, "fixture.txt");
-  await fs.writeFile(inputPath, "负责人李明", "utf8");
+  const originalText = "负责人李明，电话13800138000。";
+  const changedText = "负责人王五，电话13800138000。";
+  const docId = createTextDocId(originalText);
 
   await assert.rejects(() => runSanitization({
-    files: [{ path: inputPath, docId: "stale-doc-id" }],
+    source: { kind: "text", text: changedText, docId },
     mode: "irreversible",
-    entities: [manualEntity({ docId: "stale-doc-id", filePath: inputPath })],
+    entities: [manualEntity({ docId, filePath: "pasted-text" })],
     outputDir: tempDir
   }), /文件内容已变化/);
 });
 
-test("blocks sanitization when same-size file content changes after preview", async () => {
+test("blocks direct text export without preview or enabled entities", async () => {
   const tempDir = await makeTempDir();
-  const inputPath = path.join(tempDir, "fixture.txt");
-  await fs.writeFile(inputPath, "负责人李明", "utf8");
-  const originalStat = await fs.stat(inputPath);
-  const summary = await summarizeFile(inputPath);
-
-  await fs.writeFile(inputPath, "负责人王五", "utf8");
-  await fs.utimes(inputPath, originalStat.atime, originalStat.mtime);
-  assert.equal((await fs.stat(inputPath)).size, originalStat.size);
+  const text = "负责人李明";
+  const docId = createTextDocId(text);
+  clearPreviewedSourcesForTest();
 
   await assert.rejects(() => runSanitization({
-    files: [{ path: inputPath, docId: summary.docId }],
+    source: { kind: "text", text },
     mode: "irreversible",
-    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
-    outputDir: tempDir
-  }), /文件内容已变化/);
-});
-
-test("blocks direct export without preview or enabled entities", async () => {
-  const tempDir = await makeTempDir();
-  const inputPath = path.join(tempDir, "fixture.txt");
-  await fs.writeFile(inputPath, "负责人李明", "utf8");
-  const summary = await summarizeFile(inputPath);
-
-  await assert.rejects(() => runSanitization({
-    files: [{ path: inputPath }],
-    mode: "irreversible",
-    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    entities: [manualEntity({ docId, filePath: "pasted-text" })],
     outputDir: tempDir
   }), /请先预览识别实体/);
 
   await assert.rejects(() => runSanitization({
-    files: [{ path: inputPath, docId: summary.docId }],
+    source: { kind: "text", text, docId },
+    mode: "irreversible",
+    entities: [manualEntity({ docId, filePath: "pasted-text" })],
+    outputDir: tempDir
+  }), /请先预览识别实体/);
+
+  await previewSanitization({ kind: "text", text });
+  await assert.rejects(() => runSanitization({
+    source: { kind: "text", text, docId },
     mode: "irreversible",
     entities: [],
     outputDir: tempDir
   }), /未选择任何启用实体/);
 });
 
-test("rejects unapproved ipc paths before service execution", async () => {
+test("blocks docx export when file was imported but not previewed", async () => {
   const tempDir = await makeTempDir();
-  const inputPath = path.join(tempDir, "fixture.txt");
-  const keyFilePath = path.join(tempDir, "restore.key");
-  await fs.writeFile(inputPath, "负责人李明", "utf8");
-  await fs.writeFile(keyFilePath, "key material", "utf8");
+  const inputPath = path.join(tempDir, "fixture.docx");
+  await writeDocxWithText(inputPath, "负责人李明");
   const summary = await summarizeFile(inputPath);
-  const payload = {
-    files: [{ path: inputPath, docId: summary.docId }],
-    mode: "reversible",
+  clearPreviewedSourcesForTest();
+
+  await assert.rejects(() => runSanitization({
+    source: { kind: "word", path: inputPath, docId: summary.docId },
+    mode: "irreversible",
     entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    outputDir: tempDir
+  }), /请先预览识别实体/);
+});
+
+test("rejects unapproved ipc paths before service execution and skips text file authorization", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.docx");
+  const keyFilePath = path.join(tempDir, "restore.key");
+  await fs.writeFile(inputPath, "not a real docx", "utf8");
+  await fs.writeFile(keyFilePath, "key material", "utf8");
+  const docId = "preview-doc-id";
+  const payload = {
+    source: { kind: "word", path: inputPath, docId },
+    mode: "reversible",
+    entities: [manualEntity({ docId, filePath: inputPath })],
     outputDir: tempDir,
     credential: { method: "keyFile", keyFilePath }
   };
 
   clearAuthorizationsForTest();
+  assert.throws(() => assertPreviewPayloadAuthorized({ source: { kind: "word", path: inputPath } }), (error) => {
+    return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
+  });
+  assert.doesNotThrow(() => assertPreviewPayloadAuthorized({ source: { kind: "text", text: "负责人李明" } }));
   assert.throws(() => assertSanitizePayloadAuthorized(payload), (error) => {
     return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
   });
@@ -244,25 +265,30 @@ test("rejects unapproved ipc paths before service execution", async () => {
   clearAuthorizationsForTest();
   authorizeFilePaths([keyFilePath], "keyFile");
   authorizeOutputDirectory(tempDir);
-  assert.throws(() => assertSanitizePayloadAuthorized({
+  assert.doesNotThrow(() => assertSanitizePayloadAuthorized({
     ...payload,
-    files: [{ path: keyFilePath, docId: summary.docId }],
+    source: { kind: "text", text: "负责人李明", docId: createTextDocId("负责人李明") },
     mode: "irreversible",
     credential: undefined
-  }), (error) => error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize");
+  }));
+  assert.throws(() => assertRestorePayloadAuthorized({
+    source: { kind: "word", path: inputPath },
+    mappingPath: keyFilePath,
+    outputDir: tempDir,
+    credential: { method: "password", password: "restore" }
+  }), (error) => error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "restore");
   clearAuthorizationsForTest();
 });
 
 test("cleans reversible output when mapping credential fails", async () => {
   const tempDir = await makeTempDir();
-  const inputPath = path.join(tempDir, "fixture.txt");
-  await fs.writeFile(inputPath, "负责人李明", "utf8");
-  const summary = await summarizeFile(inputPath);
+  const text = "负责人李明";
+  const docId = createTextDocId(text);
 
   await assert.rejects(() => runSanitization({
-    files: [{ path: inputPath, docId: summary.docId }],
+    source: { kind: "text", text, docId },
     mode: "reversible",
-    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    entities: [manualEntity({ docId, filePath: "pasted-text" })],
     outputDir: tempDir,
     credential: { method: "keyFile", keyFilePath: path.join(tempDir, "missing.key") }
   }));
@@ -273,11 +299,9 @@ test("cleans reversible output when mapping credential fails", async () => {
 
 test("cleans restored output when restore report write fails", async () => {
   const tempDir = await makeTempDir();
-  const sanitizedPath = path.join(tempDir, "fixture.sanitized.txt");
   const mappingPath = path.join(tempDir, "fixture.mapping.enc.json");
   const credential = { method: "password", password: "restore-password" };
-  const entity = manualEntity({ docId: "doc1", filePath: sanitizedPath });
-  await fs.writeFile(sanitizedPath, "负责人<PERSON_001>", "utf8");
+  const entity = manualEntity({ docId: "doc1", filePath: "pasted-text" });
   await fs.writeFile(mappingPath, JSON.stringify(createEncryptedMapping({
     docId: "doc1",
     sourceFileName: "fixture.txt",
@@ -295,7 +319,7 @@ test("cleans restored output when restore report write fails", async () => {
 
   try {
     await assert.rejects(() => runRestoration({
-      filePath: sanitizedPath,
+      source: { kind: "text", text: "负责人<PERSON_001>" },
       mappingPath,
       outputDir: tempDir,
       credential
@@ -310,14 +334,14 @@ test("cleans restored output when restore report write fails", async () => {
 
 test("uses safe output names and reports without source file name", async () => {
   const tempDir = await makeTempDir();
-  const inputPath = path.join(tempDir, "李明身份证.txt");
-  await fs.writeFile(inputPath, "负责人李明", "utf8");
-  const summary = await summarizeFile(inputPath);
+  const text = "负责人李明身份证";
+  const preview = await previewSanitization({ kind: "text", text });
+  const docId = preview.files[0].docId;
 
   const result = await runSanitization({
-    files: [{ path: inputPath, docId: summary.docId }],
+    source: { kind: "text", text, docId },
     mode: "irreversible",
-    entities: [manualEntity({ docId: summary.docId, filePath: inputPath })],
+    entities: [manualEntity({ docId, filePath: "pasted-text" })],
     outputDir: tempDir
   });
 
@@ -326,7 +350,100 @@ test("uses safe output names and reports without source file name", async () => 
   assert.doesNotMatch(path.basename(outputs.reportFile), /李明|身份证/);
   const reportText = await fs.readFile(outputs.reportFile, "utf8");
   assert.doesNotMatch(reportText, /李明|身份证/);
-  assert.match(reportText, new RegExp(`document-${summary.docId}`));
+  assert.match(reportText, new RegExp(`document-${docId}`));
+});
+
+test("sanitizes and restores docx through source model", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "fixture.docx");
+  await writeDocxWithText(inputPath, "负责人李明");
+
+  const preview = await previewSanitization({ kind: "word", path: inputPath });
+  assert.equal(preview.sourceKind, "word");
+  assert.equal(preview.blocked.length, 0);
+  const docId = preview.files[0].docId;
+  const credential = { method: "password", password: "restore-password" };
+  const entity = manualEntity({ docId, filePath: inputPath });
+
+  const sanitizeResult = await runSanitization({
+    source: { kind: "word", path: inputPath, docId },
+    mode: "reversible",
+    entities: [entity],
+    outputDir: tempDir,
+    credential
+  });
+  const outputs = sanitizeResult.results[0].outputs;
+  const sanitized = await extractDocxDocument(outputs.sanitizedFile, "verify");
+  assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+
+  const restoreResult = await runRestoration({
+    source: { kind: "word", path: outputs.sanitizedFile },
+    mappingPath: outputs.mappingFile,
+    outputDir: tempDir,
+    credential
+  });
+  const restored = await extractDocxDocument(restoreResult.outputPath, "verify");
+  assert.match(restored.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("blocks unsupported file types through source preview", async () => {
+  const tempDir = await makeTempDir();
+  const extensions = [".doc", ".pdf", ".xlsx", ".txt", ".md"];
+
+  for (const extension of extensions) {
+    const inputPath = path.join(tempDir, `fixture${extension}`);
+    await fs.writeFile(inputPath, "placeholder", "utf8");
+    const preview = await previewSanitization({ kind: "word", path: inputPath });
+    assert.equal(preview.files.length, 0);
+    assert.equal(preview.blocked.length, 1);
+    if (extension === ".doc") {
+      assert.equal(preview.blocked[0].error.code, "UNSUPPORTED_LEGACY_FORMAT");
+    } else {
+      assert.equal(preview.blocked[0].error.code, "UNSUPPORTED_FILE_TYPE");
+    }
+  }
+});
+
+test("previews sanitizes and restores pasted text", async () => {
+  const tempDir = await makeTempDir();
+  const text = "负责人李明，电话13800138000，邮箱liming@example.com，账号6222021234567890123。";
+  const credential = { method: "password", password: "restore-password" };
+
+  const preview = await previewSanitization({ kind: "text", text });
+  assert.equal(preview.sourceKind, "text");
+  assert.equal(preview.blocked.length, 0);
+  assert.ok(preview.entities.some((entity) => entity.type === "phone"));
+  assert.ok(preview.entities.some((entity) => entity.type === "email"));
+  assert.ok(preview.entities.some((entity) => entity.type === "account"));
+
+  const docId = preview.files[0].docId;
+  const entities = [
+    ...preview.entities,
+    manualEntity({ docId, filePath: "pasted-text" })
+  ];
+  const sanitizeResult = await runSanitization({
+    source: { kind: "text", text, docId },
+    mode: "reversible",
+    entities,
+    outputDir: tempDir,
+    credential
+  });
+  const item = sanitizeResult.results[0];
+  assert.equal(item.sourceKind, "text");
+  assert.ok(item.sanitizedText);
+  assert.doesNotMatch(item.sanitizedText, /李明|13800138000|liming@example\.com|6222021234567890123/);
+  assert.equal(await fs.readFile(item.outputs.sanitizedFile, "utf8"), item.sanitizedText);
+  assert.ok(item.outputs.mappingFile);
+
+  const restoreResult = await runRestoration({
+    source: { kind: "text", text: item.sanitizedText },
+    mappingPath: item.outputs.mappingFile,
+    outputDir: tempDir,
+    credential
+  });
+  assert.equal(restoreResult.sourceKind, "text");
+  assert.match(restoreResult.restoredText, /李明/);
+  assert.match(restoreResult.restoredText, /13800138000/);
 });
 
 test("sanitizes docx text nodes", async () => {

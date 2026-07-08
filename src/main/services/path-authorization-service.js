@@ -57,11 +57,15 @@ function assertCredentialAuthorized(credential) {
 }
 
 function assertPreviewPayloadAuthorized(payload) {
-  payload.files.forEach((file) => assertAuthorizedFilePath(file.path, "sanitize"));
+  if (payload.source.kind === "word") {
+    assertAuthorizedFilePath(payload.source.path, "sanitize");
+  }
 }
 
 function assertSanitizePayloadAuthorized(payload) {
-  payload.files.forEach((file) => assertAuthorizedFilePath(file.path, "sanitize"));
+  if (payload.source.kind === "word") {
+    assertAuthorizedFilePath(payload.source.path, "sanitize");
+  }
   assertAuthorizedOutputDirectory(payload.outputDir);
   assertCredentialAuthorized(payload.credential);
 }
@@ -72,7 +76,9 @@ function assertUnlockMappingPayloadAuthorized(payload) {
 }
 
 function assertRestorePayloadAuthorized(payload) {
-  assertAuthorizedFilePath(payload.filePath, "restore");
+  if (payload.source.kind === "word") {
+    assertAuthorizedFilePath(payload.source.path, "restore");
+  }
   assertAuthorizedFilePath(payload.mappingPath, "mapping");
   assertAuthorizedOutputDirectory(payload.outputDir);
   assertCredentialAuthorized(payload.credential);

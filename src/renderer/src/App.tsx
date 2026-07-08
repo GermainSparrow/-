@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CheckCircle2,
   CircleDot,
+  Copy,
   FileCheck2,
   FileText,
   FolderOpen,
@@ -27,12 +28,14 @@ import type {
   DesktopApi,
   DocumentSummary,
   EntityItem,
+  InputSourceKind,
   NavigationView,
   PreviewBlockedFile,
   PreviewResult,
   RestoreResult,
+  RestoreSource,
   SanitizeMode,
-  SanitizeResult,
+  SanitizeSource,
   SanitizeResultItem
 } from "./types";
 
@@ -46,7 +49,9 @@ interface StatusMessage {
 }
 
 interface SanitizeState {
+  inputKind: InputSourceKind;
   files: DocumentSummary[];
+  pastedText: string;
   mode: SanitizeMode;
   credentialMethod: CredentialMethod;
   password: string;
@@ -60,7 +65,9 @@ interface SanitizeState {
 }
 
 interface RestoreState {
+  inputKind: InputSourceKind;
   file: DocumentSummary | null;
+  pastedText: string;
   mappingFile: DocumentSummary | null;
   credentialMethod: CredentialMethod;
   password: string;
@@ -87,7 +94,9 @@ const ENTITY_TYPES: EntityTypeOption[] = [
 ];
 
 const INITIAL_SANITIZE_STATE: SanitizeState = {
+  inputKind: "word",
   files: [],
+  pastedText: "",
   mode: "irreversible",
   credentialMethod: "password",
   password: "",
@@ -101,7 +110,9 @@ const INITIAL_SANITIZE_STATE: SanitizeState = {
 };
 
 const INITIAL_RESTORE_STATE: RestoreState = {
+  inputKind: "word",
   file: null,
+  pastedText: "",
   mappingFile: null,
   credentialMethod: "password",
   password: "",
@@ -142,11 +153,23 @@ export default function App() {
   }, []);
 
   const sanitizeStep = useMemo(() => {
+    const hasInput = sanitize.inputKind === "word"
+      ? sanitize.files.length > 0
+      : sanitize.pastedText.trim().length > 0;
     if (sanitize.results.length) return 4;
     if (sanitize.entities.length || sanitize.preview) return 3;
-    if (sanitize.files.length || sanitize.outputDir || sanitize.mode) return 2;
+    if (hasInput || sanitize.outputDir || sanitize.mode) return 2;
     return 1;
-  }, [sanitize.entities.length, sanitize.files.length, sanitize.mode, sanitize.outputDir, sanitize.preview, sanitize.results.length]);
+  }, [
+    sanitize.entities.length,
+    sanitize.files.length,
+    sanitize.inputKind,
+    sanitize.mode,
+    sanitize.outputDir,
+    sanitize.pastedText,
+    sanitize.preview,
+    sanitize.results.length
+  ]);
 
   async function callDesktop<T>(task: (api: DesktopApi) => Promise<ApiResponse<T>>): Promise<T> {
     if (!window.desktopApi) {
@@ -160,6 +183,39 @@ export default function App() {
     return response.data as T;
   }
 
+  function currentSanitizeDocId(state = sanitize) {
+    return state.preview?.files[0]?.docId || "";
+  }
+
+  function currentSanitizeSource(includeDocId: boolean): SanitizeSource | null {
+    if (sanitize.inputKind === "word") {
+      const file = sanitize.files[0];
+      if (!file) return null;
+      const docId = currentSanitizeDocId();
+      return {
+        kind: "word",
+        path: file.path,
+        ...(includeDocId && docId ? { docId } : {})
+      };
+    }
+
+    if (!sanitize.pastedText.trim()) return null;
+    const docId = currentSanitizeDocId();
+    return {
+      kind: "text",
+      text: sanitize.pastedText,
+      ...(includeDocId && docId ? { docId } : {})
+    };
+  }
+
+  function currentRestoreSource(): RestoreSource | null {
+    if (restore.inputKind === "word") {
+      return restore.file ? { kind: "word", path: restore.file.path } : null;
+    }
+
+    return restore.pastedText.trim() ? { kind: "text", text: restore.pastedText } : null;
+  }
+
   async function selectSanitizeFiles() {
     try {
       const files = await callDesktop((api) => api.importDocuments({ purpose: "sanitize", multi: false }));
@@ -167,6 +223,7 @@ export default function App() {
 
       setSanitize((current) => ({
         ...current,
+        inputKind: "word",
         files,
         preview: null,
         entities: [],
@@ -180,6 +237,40 @@ export default function App() {
     } catch (error) {
       setStatus(errorStatus(error));
     }
+  }
+
+  function changeSanitizeInputKind(inputKind: InputSourceKind) {
+    setSanitize((current) => ({
+      ...current,
+      inputKind,
+      preview: null,
+      entities: [],
+      results: []
+    }));
+    setManualEntity(EMPTY_MANUAL_ENTITY);
+  }
+
+  function changeSanitizeText(pastedText: string) {
+    setSanitize((current) => ({
+      ...current,
+      inputKind: "text",
+      pastedText,
+      preview: null,
+      entities: [],
+      results: []
+    }));
+  }
+
+  function clearSanitizeText() {
+    setSanitize((current) => ({
+      ...current,
+      inputKind: "text",
+      pastedText: "",
+      preview: null,
+      entities: [],
+      results: []
+    }));
+    setManualEntity(EMPTY_MANUAL_ENTITY);
   }
 
   async function selectSanitizeOutput() {
@@ -213,8 +304,9 @@ export default function App() {
   }
 
   async function previewEntities() {
-    if (!sanitize.files.length) {
-      setStatus({ tone: "error", title: "请先导入待脱敏文档" });
+    const source = currentSanitizeSource(false);
+    if (!source) {
+      setStatus({ tone: "error", title: "请先输入待脱敏内容" });
       return;
     }
 
@@ -222,12 +314,15 @@ export default function App() {
       setSanitize((current) => ({ ...current, previewing: true, results: [] }));
       const preview = await callDesktop((api) =>
         api.previewSanitize({
-          files: sanitize.files.map((file) => ({ path: file.path, docId: file.docId }))
+          source
         })
       );
 
       setSanitize((current) => ({
         ...current,
+        files: current.inputKind === "word" && current.files[0] && preview.files[0]
+          ? [{ ...current.files[0], docId: preview.files[0].docId }]
+          : current.files,
         preview,
         entities: preview.entities,
         previewing: false
@@ -298,10 +393,10 @@ export default function App() {
   }
 
   function addManualEntity() {
-    const file = sanitize.files[0];
+    const docId = currentSanitizeDocId();
     const originalValue = manualEntity.originalValue.trim();
-    if (!file) {
-      setStatus({ tone: "error", title: "请先导入待脱敏文档" });
+    if (!docId) {
+      setStatus({ tone: "error", title: "请先预览识别当前输入" });
       return;
     }
     if (!originalValue) {
@@ -309,12 +404,12 @@ export default function App() {
       return;
     }
 
-    const stableId = nextStableId(manualEntity.type, file.docId, sanitize.entities);
+    const stableId = nextStableId(manualEntity.type, docId, sanitize.entities);
     const maskedValue = manualEntity.maskedValue.trim() || `<${stableId}>`;
     const entity: EntityItem = {
       id: `manual-${Date.now()}`,
-      docId: file.docId,
-      filePath: file.path,
+      docId,
+      filePath: sanitize.inputKind === "word" ? sanitize.files[0]?.path || "" : "pasted-text",
       type: manualEntity.type,
       originalValue,
       maskedValue,
@@ -333,8 +428,9 @@ export default function App() {
   }
 
   async function runSanitize() {
-    if (!sanitize.files.length) {
-      setStatus({ tone: "error", title: "请先导入待脱敏文档" });
+    const source = currentSanitizeSource(true);
+    if (!source) {
+      setStatus({ tone: "error", title: "请先输入待脱敏内容" });
       return;
     }
     if (!sanitize.outputDir) {
@@ -370,7 +466,7 @@ export default function App() {
       setSanitize((current) => ({ ...current, running: true, results: [] }));
       const result = await callDesktop((api) =>
         api.runSanitize({
-          files: sanitize.files.map((file) => ({ path: file.path, docId: file.docId })),
+          source,
           mode: sanitize.mode,
           entities: enabledEntities,
           outputDir: sanitize.outputDir,
@@ -401,6 +497,7 @@ export default function App() {
 
       setRestore((current) => ({
         ...current,
+        inputKind: "word",
         file: files[0],
         result: null
       }));
@@ -408,6 +505,32 @@ export default function App() {
     } catch (error) {
       setStatus(errorStatus(error));
     }
+  }
+
+  function changeRestoreInputKind(inputKind: InputSourceKind) {
+    setRestore((current) => ({
+      ...current,
+      inputKind,
+      result: null
+    }));
+  }
+
+  function changeRestoreText(pastedText: string) {
+    setRestore((current) => ({
+      ...current,
+      inputKind: "text",
+      pastedText,
+      result: null
+    }));
+  }
+
+  function clearRestoreText() {
+    setRestore((current) => ({
+      ...current,
+      inputKind: "text",
+      pastedText: "",
+      result: null
+    }));
   }
 
   async function selectMappingFile() {
@@ -457,8 +580,9 @@ export default function App() {
   }
 
   async function runRestore() {
-    if (!restore.file || !restore.mappingFile || !restore.outputDir) {
-      setStatus({ tone: "error", title: "请选择待还原文件、映射文件和输出目录" });
+    const source = currentRestoreSource();
+    if (!source || !restore.mappingFile || !restore.outputDir) {
+      setStatus({ tone: "error", title: "请选择待还原内容、映射文件和输出目录" });
       return;
     }
 
@@ -469,7 +593,7 @@ export default function App() {
       setRestore((current) => ({ ...current, running: true, result: null }));
       const result = await callDesktop((api) =>
         api.runRestore({
-          filePath: restore.file!.path,
+          source,
           mappingPath: restore.mappingFile!.path,
           outputDir: restore.outputDir,
           credential
@@ -552,6 +676,9 @@ export default function App() {
               manualEntity={manualEntity}
               onManualEntityChange={setManualEntity}
               onBack={() => openView("dashboard")}
+              onInputKindChange={changeSanitizeInputKind}
+              onTextChange={changeSanitizeText}
+              onClearText={clearSanitizeText}
               onSelectFiles={selectSanitizeFiles}
               onPreview={previewEntities}
               onSelectOutput={selectSanitizeOutput}
@@ -573,6 +700,9 @@ export default function App() {
             <RestoreWorkflow
               state={restore}
               onBack={() => openView("dashboard")}
+              onInputKindChange={changeRestoreInputKind}
+              onTextChange={changeRestoreText}
+              onClearText={clearRestoreText}
               onSelectFile={selectRestoreFile}
               onSelectMappingFile={selectMappingFile}
               onSelectOutput={selectRestoreOutput}
@@ -807,6 +937,9 @@ function SanitizeWorkflow({
   manualEntity,
   onManualEntityChange,
   onBack,
+  onInputKindChange,
+  onTextChange,
+  onClearText,
   onSelectFiles,
   onPreview,
   onSelectOutput,
@@ -825,6 +958,9 @@ function SanitizeWorkflow({
   manualEntity: typeof EMPTY_MANUAL_ENTITY;
   onManualEntityChange: (value: typeof EMPTY_MANUAL_ENTITY) => void;
   onBack: () => void;
+  onInputKindChange: (kind: InputSourceKind) => void;
+  onTextChange: (text: string) => void;
+  onClearText: () => void;
   onSelectFiles: () => void;
   onPreview: () => void;
   onSelectOutput: () => void;
@@ -839,6 +975,8 @@ function SanitizeWorkflow({
   onRemoveEntity: (index: number) => void;
 }) {
   const enabledCount = state.entities.filter((entity) => entity.enabled).length;
+  const hasInput = state.inputKind === "word" ? state.files.length > 0 : state.pastedText.trim().length > 0;
+  const canAddManualEntity = Boolean(state.preview?.files[0]?.docId);
 
   return (
     <div className="space-y-6">
@@ -849,29 +987,29 @@ function SanitizeWorkflow({
       />
       <Stepper
         current={step}
-        steps={["导入文件", "选择模式", "确认实体", "导出结果"]}
+        steps={["输入内容", "选择模式", "确认实体", "导出结果"]}
       />
 
       <section className="grid grid-cols-12 gap-5">
         <div className="col-span-12 space-y-5 xl:col-span-8">
-          <Panel title="待脱敏文档" icon={UploadCloud}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-on-surface">支持 DOCX、XLSX、PDF、TXT、MD</p>
-                <p className="mt-1 text-xs text-on-surface-muted">旧版 DOC/XLS 和无法确认内容会由 main process 阻断。</p>
-              </div>
-              <Button icon={FolderOpen} onClick={onSelectFiles}>
-                选择文件
-              </Button>
-            </div>
-            <FileList files={state.files} preview={state.preview} />
+          <Panel title="输入内容" icon={UploadCloud}>
+            <InputSourcePanel
+              inputKind={state.inputKind}
+              files={state.files}
+              pastedText={state.pastedText}
+              preview={state.preview}
+              onInputKindChange={onInputKindChange}
+              onTextChange={onTextChange}
+              onClearText={onClearText}
+              onSelectFiles={onSelectFiles}
+            />
           </Panel>
 
           <Panel
             title="实体确认"
             icon={FileCheck2}
             right={
-              <Button icon={RefreshCw} variant="secondary" onClick={onPreview} disabled={state.previewing || !state.files.length}>
+              <Button icon={RefreshCw} variant="secondary" onClick={onPreview} disabled={state.previewing || !hasInput}>
                 {state.previewing ? "识别中" : "预览识别"}
               </Button>
             }
@@ -880,7 +1018,7 @@ function SanitizeWorkflow({
               value={manualEntity}
               onChange={onManualEntityChange}
               onAdd={onAddManualEntity}
-              disabled={!state.files.length}
+              disabled={!canAddManualEntity}
             />
             <EntityTable
               entities={state.entities}
@@ -948,6 +1086,9 @@ function SanitizeWorkflow({
 function RestoreWorkflow({
   state,
   onBack,
+  onInputKindChange,
+  onTextChange,
+  onClearText,
   onSelectFile,
   onSelectMappingFile,
   onSelectOutput,
@@ -958,6 +1099,9 @@ function RestoreWorkflow({
 }: {
   state: RestoreState;
   onBack: () => void;
+  onInputKindChange: (kind: InputSourceKind) => void;
+  onTextChange: (text: string) => void;
+  onClearText: () => void;
   onSelectFile: () => void;
   onSelectMappingFile: () => void;
   onSelectOutput: () => void;
@@ -977,14 +1121,16 @@ function RestoreWorkflow({
       <section className="grid grid-cols-12 gap-5">
         <div className="col-span-12 space-y-5 xl:col-span-8">
           <Panel title="还原输入" icon={RotateCcw}>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <FilePickCard
-                icon={FileText}
-                title="脱敏文件"
-                file={state.file}
-                buttonLabel="选择文件"
-                onSelect={onSelectFile}
-              />
+            <RestoreInputPanel
+              inputKind={state.inputKind}
+              file={state.file}
+              pastedText={state.pastedText}
+              onInputKindChange={onInputKindChange}
+              onTextChange={onTextChange}
+              onClearText={onClearText}
+              onSelectFile={onSelectFile}
+            />
+            <div className="mt-3">
               <FilePickCard
                 icon={KeyRound}
                 title="加密映射文件"
@@ -1008,6 +1154,9 @@ function RestoreWorkflow({
                     ["报告", state.result.reportPath]
                   ]}
                 />
+                {state.result.restoredText ? (
+                  <TextResult title="还原文本" value={state.result.restoredText} />
+                ) : null}
                 {state.result.warnings.length > 0 && (
                   <WarningList warnings={state.result.warnings} />
                 )}
@@ -1168,6 +1317,157 @@ function Button({
       {Icon && <Icon size={16} />}
       {children}
     </button>
+  );
+}
+
+function InputSourcePanel({
+  inputKind,
+  files,
+  pastedText,
+  preview,
+  onInputKindChange,
+  onTextChange,
+  onClearText,
+  onSelectFiles
+}: {
+  inputKind: InputSourceKind;
+  files: DocumentSummary[];
+  pastedText: string;
+  preview: PreviewResult | null;
+  onInputKindChange: (kind: InputSourceKind) => void;
+  onTextChange: (text: string) => void;
+  onClearText: () => void;
+  onSelectFiles: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <SegmentedControl
+        value={inputKind}
+        options={[
+          { value: "word", label: "Word 文件" },
+          { value: "text", label: "粘贴文本" }
+        ]}
+        onChange={(value) => onInputKindChange(value as InputSourceKind)}
+      />
+
+      {inputKind === "word" ? (
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-on-surface">支持 Word DOCX</p>
+              <p className="mt-1 text-xs text-on-surface-muted">旧版 DOC 请另存为 DOCX 后处理。</p>
+            </div>
+            <Button icon={FolderOpen} onClick={onSelectFiles}>
+              选择 DOCX
+            </Button>
+          </div>
+          <FileList files={files} preview={preview} />
+        </div>
+      ) : (
+        <TextInputArea
+          value={pastedText}
+          placeholder="粘贴待脱敏文本"
+          onChange={onTextChange}
+          onClear={onClearText}
+        />
+      )}
+    </div>
+  );
+}
+
+function RestoreInputPanel({
+  inputKind,
+  file,
+  pastedText,
+  onInputKindChange,
+  onTextChange,
+  onClearText,
+  onSelectFile
+}: {
+  inputKind: InputSourceKind;
+  file: DocumentSummary | null;
+  pastedText: string;
+  onInputKindChange: (kind: InputSourceKind) => void;
+  onTextChange: (text: string) => void;
+  onClearText: () => void;
+  onSelectFile: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <SegmentedControl
+        value={inputKind}
+        options={[
+          { value: "word", label: "Word 文件" },
+          { value: "text", label: "粘贴文本" }
+        ]}
+        onChange={(value) => onInputKindChange(value as InputSourceKind)}
+      />
+
+      {inputKind === "word" ? (
+        <FilePickCard
+          icon={FileText}
+          title="脱敏 DOCX"
+          file={file}
+          buttonLabel="选择 DOCX"
+          onSelect={onSelectFile}
+        />
+      ) : (
+        <TextInputArea
+          value={pastedText}
+          placeholder="粘贴待还原文本"
+          onChange={onTextChange}
+          onClear={onClearText}
+        />
+      )}
+    </div>
+  );
+}
+
+function TextInputArea({
+  value,
+  placeholder,
+  readOnly = false,
+  onChange,
+  onClear
+}: {
+  value: string;
+  placeholder?: string;
+  readOnly?: boolean;
+  onChange?: (value: string) => void;
+  onClear?: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <textarea
+        value={value}
+        readOnly={readOnly}
+        placeholder={placeholder}
+        onChange={(event) => onChange?.(event.target.value)}
+        className="min-h-[220px] w-full resize-y rounded-lg border border-border bg-surface px-3 py-3 text-sm leading-6 text-on-surface outline-none focus:border-primary"
+      />
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-muted">
+        <span>{value.length} 字符</span>
+        {onClear ? (
+          <Button icon={Trash2} variant="secondary" disabled={!value} onClick={onClear}>
+            清空
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TextResult({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-bold text-on-surface">{title}</p>
+        <Button icon={Copy} variant="secondary" onClick={() => void navigator.clipboard?.writeText(value)}>
+          复制
+        </Button>
+      </div>
+      <TextInputArea value={value} readOnly />
+    </div>
   );
 }
 
@@ -1544,11 +1844,13 @@ function FilePickCard({
 }
 
 function OutputGroup({ result }: { result: SanitizeResultItem }) {
+  const sourceTitle = result.sourceKind === "word" ? fileNameFromPath(result.sourceLabel) : result.sourceLabel;
+
   return (
     <div className="rounded-lg border border-border bg-surface-muted p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-bold text-on-surface">{fileNameFromPath(result.sourcePath)}</p>
+          <p className="text-sm font-bold text-on-surface">{sourceTitle}</p>
           <p className="mt-1 text-xs text-on-surface-muted">
             实体 {result.entitySummary.total} 个
           </p>
@@ -1562,6 +1864,7 @@ function OutputGroup({ result }: { result: SanitizeResultItem }) {
           result.outputs.reportFile ? ["报告", result.outputs.reportFile] : null
         ].filter((row): row is [string, string] => Boolean(row))}
       />
+      {result.sanitizedText ? <div className="mt-4"><TextResult title="脱敏文本" value={result.sanitizedText} /></div> : null}
       {result.warnings.length > 0 && <WarningList warnings={result.warnings} />}
     </div>
   );

@@ -80,7 +80,7 @@ app.whenReady().then(() => {
   ipcMain.handle("sanitize:preview", async (_event, payload) => runSafely(async () => {
     const data = parseWithSchema(previewSchema, payload);
     assertPreviewPayloadAuthorized(data);
-    return previewSanitization(data.files);
+    return previewSanitization(data.source);
   }));
 
   ipcMain.handle("sanitize:run", async (_event, payload) => runSafely(async () => {
@@ -142,8 +142,7 @@ function getImportFilters(purpose) {
   }
 
   return [
-    { name: "Supported Documents", extensions: ["doc", "docx", "pdf", "txt", "md", "xls", "xlsx"] },
-    { name: "All Files", extensions: ["*"] }
+    { name: "Word Documents", extensions: ["docx"] }
   ];
 }
 

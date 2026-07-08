@@ -24,11 +24,25 @@ const documentImportSchema = z.object({
   multi: z.boolean().default(false)
 }).default({});
 
+const wordSourceSchema = z.object({
+  kind: z.literal("word"),
+  path: z.string().min(1),
+  docId: z.string().min(1).optional()
+});
+
+const textSourceSchema = z.object({
+  kind: z.literal("text"),
+  text: z.string().min(1),
+  docId: z.string().min(1).optional()
+});
+
+const sourceSchema = z.discriminatedUnion("kind", [
+  wordSourceSchema,
+  textSourceSchema
+]);
+
 const previewSchema = z.object({
-  files: z.array(z.object({
-    path: z.string().min(1),
-    docId: z.string().min(1).optional()
-  })).min(1)
+  source: sourceSchema
 });
 
 const credentialSchema = z.discriminatedUnion("method", [
@@ -43,10 +57,7 @@ const credentialSchema = z.discriminatedUnion("method", [
 ]);
 
 const sanitizeRunSchema = z.object({
-  files: z.array(z.object({
-    path: z.string().min(1),
-    docId: z.string().min(1).optional()
-  })).min(1),
+  source: sourceSchema,
   mode: z.enum(["irreversible", "reversible"]),
   entities: z.array(entitySchema),
   outputDir: z.string().min(1),
@@ -67,7 +78,16 @@ const unlockMappingSchema = z.object({
 });
 
 const restoreRunSchema = z.object({
-  filePath: z.string().min(1),
+  source: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("word"),
+      path: z.string().min(1)
+    }),
+    z.object({
+      kind: z.literal("text"),
+      text: z.string().min(1)
+    })
+  ]),
   mappingPath: z.string().min(1),
   outputDir: z.string().min(1),
   credential: credentialSchema

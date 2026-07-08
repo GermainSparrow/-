@@ -4,6 +4,8 @@ export type SanitizeMode = "irreversible" | "reversible";
 
 export type CredentialMethod = "password" | "keyFile";
 
+export type InputSourceKind = "word" | "text";
+
 export interface PublicError {
   code?: string;
   message: string;
@@ -28,6 +30,8 @@ export interface PreviewFileSummary {
   path: string;
   docId: string;
   kind: string;
+  sourceKind: InputSourceKind;
+  sourceLabel: string;
   warnings: string[];
   textLength: number;
 }
@@ -58,6 +62,8 @@ export interface PreviewBlockedFile {
 }
 
 export interface PreviewResult {
+  sourceKind: InputSourceKind;
+  sourceLabel: string;
   files: PreviewFileSummary[];
   blocked: PreviewBlockedFile[];
   entities: EntityItem[];
@@ -80,10 +86,13 @@ export interface SanitizeOutputPaths {
 
 export interface SanitizeResultItem {
   sourcePath: string;
+  sourceKind: InputSourceKind;
+  sourceLabel: string;
   docId: string;
   entitySummary: EntitySummary;
   warnings: string[];
   outputs: SanitizeOutputPaths;
+  sanitizedText: string | null;
 }
 
 export interface SanitizeResult {
@@ -99,11 +108,22 @@ export interface MappingUnlockResult {
 }
 
 export interface RestoreResult {
+  sourceKind: InputSourceKind;
+  sourceLabel: string;
   outputPath: string;
   reportPath: string;
   warnings: string[];
   entitySummary: EntitySummary;
+  restoredText: string | null;
 }
+
+export type SanitizeSource =
+  | { kind: "word"; path: string; docId?: string }
+  | { kind: "text"; text: string; docId?: string };
+
+export type RestoreSource =
+  | { kind: "word"; path: string }
+  | { kind: "text"; text: string };
 
 export interface DesktopApi {
   getVersion: () => Promise<string>;
@@ -112,10 +132,10 @@ export interface DesktopApi {
     multi?: boolean;
   }) => Promise<ApiResponse<DocumentSummary[]>>;
   previewSanitize: (payload: {
-    files: Array<{ path: string; docId?: string }>;
+    source: SanitizeSource;
   }) => Promise<ApiResponse<PreviewResult>>;
   runSanitize: (payload: {
-    files: Array<{ path: string; docId?: string }>;
+    source: SanitizeSource;
     mode: SanitizeMode;
     entities: EntityItem[];
     outputDir: string;
@@ -127,7 +147,7 @@ export interface DesktopApi {
     credential: Credential;
   }) => Promise<ApiResponse<MappingUnlockResult>>;
   runRestore: (payload: {
-    filePath: string;
+    source: RestoreSource;
     mappingPath: string;
     outputDir: string;
     credential: Credential;
@@ -139,4 +159,3 @@ declare global {
     desktopApi?: DesktopApi;
   }
 }
-
