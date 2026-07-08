@@ -1,5 +1,5 @@
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu } = require("electron");
 const {
   documentImportSchema,
   droppedDocumentImportSchema,
@@ -32,6 +32,11 @@ const {
   authorizeFilePaths,
   authorizeOutputDirectory
 } = require("./services/path-authorization-service");
+const {
+  configureOutputDirectoryStore,
+  getLastOutputDirectory,
+  saveLastOutputDirectory
+} = require("./services/output-directory-service");
 
 function createMainWindow() {
   const mainWindow = new BrowserWindow({
@@ -41,6 +46,8 @@ function createMainWindow() {
     minHeight: 620,
     title: "文档脱敏还原软件",
     backgroundColor: "#f6f7fb",
+    autoHideMenuBar: true,
+    icon: path.join(__dirname, "../renderer/public/app-logo.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -58,7 +65,10 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
-  configureEntitySetStore(app.getPath("userData"));
+  const userDataPath = app.getPath("userData");
+  configureEntitySetStore(userDataPath);
+  configureOutputDirectoryStore(userDataPath);
+  Menu.setApplicationMenu(null);
 
   ipcMain.handle("app:get-version", () => app.getVersion());
 
@@ -88,9 +98,19 @@ app.whenReady().then(() => {
     return Promise.all(options.filePaths.map((filePath) => summarizeFile(filePath)));
   }));
 
+  ipcMain.handle("output:get-last-directory", async () => runSafely(async () => {
+    const directoryPath = await getLastOutputDirectory();
+    if (directoryPath) {
+      authorizeOutputDirectory(directoryPath);
+    }
+    return directoryPath;
+  }));
+
   ipcMain.handle("output:select-directory", async () => runSafely(async () => {
+    const lastOutputDirectory = await getLastOutputDirectory();
     const result = await dialog.showOpenDialog({
       title: "选择输出目录",
+      ...(lastOutputDirectory ? { defaultPath: lastOutputDirectory } : {}),
       properties: ["openDirectory", "createDirectory"]
     });
 
@@ -99,6 +119,7 @@ app.whenReady().then(() => {
     }
 
     authorizeOutputDirectory(result.filePaths[0]);
+    await saveLastOutputDirectory(result.filePaths[0]);
     return result.filePaths[0];
   }));
 

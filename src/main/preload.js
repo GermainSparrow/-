@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   }),
   previewSanitize: (payload) => ipcRenderer.invoke("sanitize:preview", payload),
   runSanitize: (payload) => ipcRenderer.invoke("sanitize:run", payload),
+  getLastOutputDirectory: () => ipcRenderer.invoke("output:get-last-directory"),
   selectOutputDirectory: () => ipcRenderer.invoke("output:select-directory"),
   unlockMapping: (payload) => ipcRenderer.invoke("mapping:unlock", payload),
   runRestore: (payload) => ipcRenderer.invoke("restore:run", payload),

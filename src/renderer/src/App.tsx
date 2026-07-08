@@ -147,6 +147,7 @@ export default function App() {
       .then(setVersion)
       .catch(() => setVersion("unknown"));
     loadEntitySets();
+    loadLastOutputDirectory();
   }, []);
 
   const sanitizeStep = useMemo(() => {
@@ -187,6 +188,24 @@ export default function App() {
       setSelectedEntitySetId((current) => current || sets[0]?.id || "");
     } catch (error) {
       setStatus(errorStatus(error));
+    }
+  }
+
+  async function loadLastOutputDirectory() {
+    try {
+      const outputDir = await callDesktop((api) => api.getLastOutputDirectory());
+      if (!outputDir) return;
+
+      setSanitize((current) => ({
+        ...current,
+        outputDir: current.outputDir || outputDir
+      }));
+      setRestore((current) => ({
+        ...current,
+        outputDir: current.outputDir || outputDir
+      }));
+    } catch {
+      // Missing or stale directory history should not block the workspace.
     }
   }
 
@@ -837,11 +856,11 @@ function Sidebar({
   return (
     <nav className="fixed left-0 top-0 z-40 flex h-screen w-[260px] flex-col border-r border-border bg-surface">
       <div className="flex items-center gap-3 border-b border-border px-6 py-7">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-white">
-          <ShieldCheck size={22} strokeWidth={2.3} />
+        <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-surface">
+          <img src="./app-logo.png" alt="" className="h-10 w-10 object-contain" />
         </div>
         <div>
-          <h1 className="text-base font-bold leading-tight text-primary">SecureMask Pro</h1>
+          <h1 className="text-base font-bold leading-tight text-primary">脱敏助手</h1>
           <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-on-surface-muted">
             Local De-ID
           </p>
@@ -879,7 +898,7 @@ function Sidebar({
         <div className="flex items-center gap-3 rounded-lg bg-surface-muted px-3 py-3">
           <LockKeyhole size={18} className="text-success" />
           <div>
-            <p className="text-xs font-semibold text-on-surface">本地安全桥接</p>
+            <p className="text-xs font-semibold text-on-surface">本地脱敏还原</p>
             <p className="font-mono text-[10px] text-on-surface-muted">v{version}</p>
           </div>
         </div>

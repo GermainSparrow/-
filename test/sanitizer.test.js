@@ -21,6 +21,12 @@ const {
   saveEntitySet
 } = require("../src/main/services/entity-set-service");
 const {
+  clearOutputDirectoryStoreForTest,
+  configureOutputDirectoryStore,
+  getLastOutputDirectory,
+  saveLastOutputDirectory
+} = require("../src/main/services/output-directory-service");
+const {
   createEncryptedMapping,
   decryptMappingPackage
 } = require("../src/main/services/crypto-service");
@@ -93,6 +99,25 @@ async function writeDocxWithText(filePath, text) {
   zip.file("word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`);
   await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer" }));
 }
+
+test("persists last output directory and ignores stale paths", async () => {
+  const tempDir = await makeTempDir();
+  const outputDir = path.join(tempDir, "exports");
+  await fs.mkdir(outputDir);
+
+  configureOutputDirectoryStore(tempDir);
+  assert.equal(await getLastOutputDirectory(), null);
+  assert.equal(await saveLastOutputDirectory(outputDir), outputDir);
+  assert.equal(await getLastOutputDirectory(), outputDir);
+
+  clearOutputDirectoryStoreForTest();
+  configureOutputDirectoryStore(tempDir);
+  assert.equal(await getLastOutputDirectory(), outputDir);
+
+  await fs.rm(outputDir, { recursive: true, force: true });
+  assert.equal(await getLastOutputDirectory(), null);
+  clearOutputDirectoryStoreForTest();
+});
 
 test("detects structured entities and replaces longer strings first", () => {
   const documents = [{

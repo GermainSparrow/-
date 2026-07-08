@@ -175,6 +175,7 @@ export interface DesktopApi {
       imageContentUnmodified?: boolean;
     };
   }) => Promise<ApiResponse<SanitizeResult>>;
+  getLastOutputDirectory: () => Promise<ApiResponse<string | null>>;
   selectOutputDirectory: () => Promise<ApiResponse<string | null>>;
   unlockMapping: (payload: {
     mappingPath: string;
