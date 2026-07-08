@@ -3,6 +3,10 @@ const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const {
   documentImportSchema,
   droppedDocumentImportSchema,
+  entitySetDeleteSchema,
+  entitySetExportSchema,
+  entitySetImportSchema,
+  entitySetSaveSchema,
   parseWithSchema,
   previewSchema,
   restoreRunSchema,
@@ -11,6 +15,14 @@ const {
 } = require("./services/schemas");
 const { runSafely } = require("./services/response");
 const { previewSanitization, runRestoration, runSanitization, unlockMapping } = require("./services/sanitizer-service");
+const {
+  configureEntitySetStore,
+  deleteEntitySet,
+  exportEntitySet,
+  importEntitySet,
+  listEntitySets,
+  saveEntitySet
+} = require("./services/entity-set-service");
 const { assertSupported, summarizeFile } = require("./services/document-service");
 const {
   assertPreviewPayloadAuthorized,
@@ -46,6 +58,8 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  configureEntitySetStore(app.getPath("userData"));
+
   ipcMain.handle("app:get-version", () => app.getVersion());
 
   ipcMain.handle("document:import", async (_event, payload) => runSafely(async () => {
@@ -110,6 +124,28 @@ app.whenReady().then(() => {
     const data = parseWithSchema(restoreRunSchema, payload);
     assertRestorePayloadAuthorized(data);
     return runRestoration(data);
+  }));
+
+  ipcMain.handle("entity-sets:list", async () => runSafely(async () => listEntitySets()));
+
+  ipcMain.handle("entity-sets:save", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(entitySetSaveSchema, payload);
+    return saveEntitySet(data.entitySet);
+  }));
+
+  ipcMain.handle("entity-sets:delete", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(entitySetDeleteSchema, payload);
+    return deleteEntitySet(data.id);
+  }));
+
+  ipcMain.handle("entity-sets:import", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(entitySetImportSchema, payload);
+    return importEntitySet(data);
+  }));
+
+  ipcMain.handle("entity-sets:export", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(entitySetExportSchema, payload);
+    return exportEntitySet(data);
   }));
 
   createMainWindow();

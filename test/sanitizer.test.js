@@ -14,6 +14,13 @@ const {
   detectEntities
 } = require("../src/main/services/entity-service");
 const {
+  clearEntitySetStoreForTest,
+  exportEntitySet,
+  importEntitySet,
+  listEntitySets,
+  saveEntitySet
+} = require("../src/main/services/entity-set-service");
+const {
   createEncryptedMapping,
   decryptMappingPackage
 } = require("../src/main/services/crypto-service");
@@ -55,6 +62,7 @@ const {
 } = require("../src/main/services/path-authorization-service");
 const {
   droppedDocumentImportSchema,
+  entitySetSaveSchema,
   parseWithSchema
 } = require("../src/main/services/schemas");
 
@@ -96,9 +104,11 @@ test("detects structured entities and replaces longer strings first", () => {
     }]
   }];
   const detected = detectEntities(documents);
-  assert.ok(detected.some((entity) => entity.type === "phone"));
-  assert.ok(detected.some((entity) => entity.type === "email"));
-  assert.ok(detected.some((entity) => entity.type === "account"));
+  assert.ok(detected.some((entity) => entity.originalValue === "13800138000"));
+  assert.ok(detected.some((entity) => entity.originalValue === "liming@example.com"));
+  assert.ok(detected.some((entity) => entity.originalValue === "6222021234567890123"));
+  assert.ok(detected.every((entity) => entity.type === "entity"));
+  assert.deepEqual(detected.map((entity) => entity.stableId), ["ENTITY_001", "ENTITY_002", "ENTITY_003"]);
 
   const text = "李明和明";
   const result = applySanitization(text, [
@@ -106,6 +116,77 @@ test("detects structured entities and replaces longer strings first", () => {
     manualEntity({ originalValue: "李明", maskedValue: "<PERSON_001>", stableId: "PERSON_001" })
   ]);
   assert.equal(result, "<PERSON_001>和<CHAR_001>");
+});
+
+test("detects custom entity set entries with longest match and deduplication", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "四川路桥建设集团股份有限公司简称四川路桥，四川路桥再次出现。四川路航参与。"
+    }]
+  }];
+  const entitySets = [{
+    id: "set1",
+    name: "测试词库",
+    enabled: true,
+    items: [
+      {
+        id: "item1",
+        type: "company",
+        canonicalName: "四川路桥建设集团股份有限公司",
+        aliases: ["四川路桥"],
+        enabled: true
+      },
+      {
+        id: "item2",
+        type: "company",
+        canonicalName: "四川路航",
+        aliases: [],
+        enabled: true
+      }
+    ]
+  }];
+
+  const detected = detectEntities(documents, entitySets).filter((entity) => entity.source === "custom");
+  const byValue = new Map(detected.map((entity) => [entity.originalValue, entity]));
+  assert.equal(byValue.get("四川路桥建设集团股份有限公司").locations.length, 1);
+  assert.equal(byValue.get("四川路桥").locations.length, 2);
+  assert.equal(byValue.get("四川路航").locations.length, 1);
+  assert.ok(detected.every((entity) => entity.type === "entity"));
+  assert.equal(byValue.get("四川路桥").source, "custom");
+});
+
+test("custom entity set detection respects disabled sets items and duplicate aliases", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "四川路桥与四川路航"
+    }]
+  }];
+
+  assert.equal(detectEntities(documents, [{
+    id: "disabled-set",
+    name: "停用词库",
+    enabled: false,
+    items: [{ id: "item1", type: "company", canonicalName: "四川路桥", aliases: [], enabled: true }]
+  }]).filter((entity) => entity.source === "custom").length, 0);
+
+  const detected = detectEntities(documents, [{
+    id: "set1",
+    name: "测试词库",
+    enabled: true,
+    items: [
+      { id: "disabled-item", type: "company", canonicalName: "四川路航", aliases: [], enabled: false },
+      { id: "item1", type: "company", canonicalName: "四川路桥", aliases: ["四川路桥"], enabled: true },
+      { id: "item2", type: "company", canonicalName: "重复项", aliases: ["四川路桥"], enabled: true }
+    ]
+  }]).filter((entity) => entity.source === "custom");
+
+  assert.deepEqual(detected.map((entity) => entity.originalValue), ["四川路桥"]);
 });
 
 test("restores only existing placeholders and stable tags", () => {
@@ -432,6 +513,111 @@ test("validates dropped docx import payloads", () => {
   assert.throws(() => assertSupported("D:/work/fixture.pdf"), /仅支持 Word DOCX 文件/);
 });
 
+test("preview includes built in shudao entity set entries", async () => {
+  clearEntitySetStoreForTest();
+  try {
+    const preview = await previewSanitization({ kind: "text", text: "四川路桥与四川路航联合施工。" });
+    const customValues = preview.entities
+      .filter((entity) => entity.source === "custom")
+      .map((entity) => entity.originalValue);
+    assert.ok(customValues.includes("四川路桥"));
+    assert.ok(customValues.includes("四川路航"));
+    assert.ok(preview.entities.every((entity) => entity.source !== "custom" || entity.type === "entity"));
+  } finally {
+    clearEntitySetStoreForTest();
+  }
+});
+
+test("imports and exports entity sets as csv and json", async () => {
+  clearEntitySetStoreForTest();
+  try {
+    const imported = await importEntitySet({
+      format: "csv",
+      content: "type,canonicalName,aliases,maskedValue,enabled,sourceName,sourceUrl,notes\ncompany,测试公司,测试简称|测试集团,,true,单元测试,https://example.com,备注"
+    });
+    assert.equal(imported.length, 1);
+    assert.equal(imported[0].items[0].canonicalName, "测试公司");
+    assert.equal(imported[0].items[0].type, "entity");
+    assert.deepEqual(imported[0].items[0].aliases, ["测试简称", "测试集团"]);
+
+    const exportedJson = await exportEntitySet({ id: imported[0].id, format: "json" });
+    const exported = JSON.parse(exportedJson.content);
+    assert.equal(exported.items[0].canonicalName, "测试公司");
+
+    const exportedCsv = await exportEntitySet({ id: imported[0].id, format: "csv" });
+    assert.match(exportedCsv.content, /canonicalName/);
+    assert.doesNotMatch(exportedCsv.content.split("\n")[0], /type/);
+    assert.match(exportedCsv.content, /测试公司/);
+
+    const sets = await listEntitySets();
+    assert.ok(sets.some((entitySet) => entitySet.id === imported[0].id));
+  } finally {
+    clearEntitySetStoreForTest();
+  }
+});
+
+test("saves entity sets while dropping blank draft items", async () => {
+  clearEntitySetStoreForTest();
+  try {
+    assert.doesNotThrow(() => parseWithSchema(entitySetSaveSchema, {
+      entitySet: {
+        id: "draft-set",
+        name: "新建实体集",
+        enabled: true,
+        version: "1.0.0",
+        items: [{ id: "blank-item", canonicalName: "", aliases: [], enabled: true }]
+      }
+    }));
+
+    const savedBlank = await saveEntitySet({
+      id: "draft-set",
+      name: "新建实体集",
+      enabled: true,
+      version: "1.0.0",
+      items: [{
+        id: "blank-item",
+        canonicalName: "",
+        aliases: [],
+        maskedValue: "",
+        enabled: true,
+        sourceName: "",
+        sourceUrl: "",
+        notes: ""
+      }]
+    });
+    assert.equal(savedBlank.items.length, 0);
+
+    const savedMixed = await saveEntitySet({
+      id: "mixed-set",
+      name: "混合实体集",
+      enabled: true,
+      version: "1.0.0",
+      items: [
+        {
+          id: "valid-item",
+          canonicalName: "四川路桥",
+          aliases: [],
+          enabled: true
+        },
+        {
+          id: "blank-item",
+          canonicalName: "",
+          aliases: [],
+          maskedValue: "",
+          enabled: true,
+          sourceName: "",
+          sourceUrl: "",
+          notes: ""
+        }
+      ]
+    });
+    assert.equal(savedMixed.items.length, 1);
+    assert.equal(savedMixed.items[0].canonicalName, "四川路桥");
+  } finally {
+    clearEntitySetStoreForTest();
+  }
+});
+
 test("previews sanitizes and restores pasted text", async () => {
   const tempDir = await makeTempDir();
   const text = "负责人李明，电话13800138000，邮箱liming@example.com，账号6222021234567890123。";
@@ -440,9 +626,10 @@ test("previews sanitizes and restores pasted text", async () => {
   const preview = await previewSanitization({ kind: "text", text });
   assert.equal(preview.sourceKind, "text");
   assert.equal(preview.blocked.length, 0);
-  assert.ok(preview.entities.some((entity) => entity.type === "phone"));
-  assert.ok(preview.entities.some((entity) => entity.type === "email"));
-  assert.ok(preview.entities.some((entity) => entity.type === "account"));
+  assert.ok(preview.entities.some((entity) => entity.originalValue === "13800138000"));
+  assert.ok(preview.entities.some((entity) => entity.originalValue === "liming@example.com"));
+  assert.ok(preview.entities.some((entity) => entity.originalValue === "6222021234567890123"));
+  assert.ok(preview.entities.every((entity) => entity.type === "entity"));
 
   const docId = preview.files[0].docId;
   const entities = [
@@ -541,13 +728,13 @@ test("sanitizes docx field code text", async () => {
 
   const extracted = await extractDocxDocument(inputPath, "doc1");
   const entities = detectEntities([extracted]);
-  assert.ok(entities.some((entity) => entity.type === "email"));
+  assert.ok(entities.some((entity) => entity.originalValue === "liming@example.com"));
 
   await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities });
   const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
   const documentXml = await sanitizedZip.file("word/document.xml").async("text");
   assert.doesNotMatch(documentXml, /liming@example\.com/);
-  assert.match(documentXml, /EMAIL_001/);
+  assert.match(documentXml, /ENTITY_001/);
 });
 
 test("blocks docx unhandled xml attributes without writing output", async () => {
@@ -644,9 +831,9 @@ test("sanitizes and restores docx custom xml text and attributes", async () => {
   const customXml = await sanitizedZip.file("customXml/item1.xml").async("text");
   assert.doesNotMatch(customXml, /李明|13800138000|liming@example\.com|6222021234567890123/);
   assert.match(customXml, /PERSON_001/);
-  assert.match(customXml, /PHONE_001/);
-  assert.match(customXml, /EMAIL_001/);
-  assert.match(customXml, /ACCOUNT_001/);
+  assert.match(customXml, /ENTITY_001/);
+  assert.match(customXml, /ENTITY_002/);
+  assert.match(customXml, /ENTITY_003/);
   assert.match(customXml, /xsi:type="text"/);
 
   await restoreDocxDocument({ filePath: sanitizedCustomPath, outputPath: restoredCustomPath, entities });
@@ -695,8 +882,8 @@ test("blocks rather than rewriting docx custom xml item properties", async () =>
     entities: [manualEntity({
       type: "phone",
       originalValue: "13800138000",
-      maskedValue: "<PHONE_001>",
-      stableId: "PHONE_001"
+      maskedValue: "<ENTITY_001>",
+      stableId: "ENTITY_001"
     })]
   }), /DOCX 脱敏后仍检测到原始敏感信息/);
   await assert.rejects(() => fs.access(outputPath));
@@ -762,13 +949,13 @@ test("sanitizes docx external relationship targets", async () => {
 
   const extracted = await extractDocxDocument(inputPath, "doc1");
   const entities = detectEntities([extracted]);
-  assert.ok(entities.some((entity) => entity.type === "email"));
+  assert.ok(entities.some((entity) => entity.originalValue === "liming@example.com"));
 
   await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities });
   const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
   const rels = await sanitizedZip.file("word/_rels/document.xml.rels").async("text");
   assert.doesNotMatch(rels, /liming@example\.com/);
-  assert.match(rels, /EMAIL_001/);
+  assert.match(rels, /ENTITY_001/);
 });
 
 test("sanitizes xlsx cell text", async () => {
@@ -828,7 +1015,7 @@ test("sanitizes xlsx headers and footers", async () => {
   assert.doesNotMatch(sanitizedSheet.headerFooter.oddHeader, /李明/);
   assert.doesNotMatch(sanitizedSheet.headerFooter.oddFooter, /13800138000/);
   assert.match(sanitizedSheet.headerFooter.oddHeader, /PERSON_001/);
-  assert.match(sanitizedSheet.headerFooter.oddFooter, /PHONE_001/);
+  assert.match(sanitizedSheet.headerFooter.oddFooter, /ENTITY_001/);
 });
 
 test("blocks xlsx unconfirmed structured values in data validations", async () => {
@@ -867,13 +1054,13 @@ test("detects and sanitizes numeric xlsx sensitive cells", async () => {
 
   const extracted = await extractXlsxDocument(inputPath, "doc1");
   const entities = detectEntities([extracted]);
-  assert.ok(entities.some((entity) => entity.type === "phone"));
+  assert.ok(entities.some((entity) => entity.originalValue === "13800138000"));
 
   await sanitizeXlsxDocument({ filePath: inputPath, outputPath, entities });
   const sanitized = await extractXlsxDocument(outputPath, "doc1");
   const text = sanitized.textSegments.map((segment) => segment.text).join("\n");
   assert.doesNotMatch(text, /13800138000/);
-  assert.match(text, /<PHONE_001>/);
+  assert.match(text, /<ENTITY_001>/);
 });
 
 test("sanitizes text PDF by regenerating safe PDF", async () => {

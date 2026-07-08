@@ -20,7 +20,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import type {
   ApiResponse,
   Credential,
@@ -28,6 +28,8 @@ import type {
   DesktopApi,
   DocumentSummary,
   EntityItem,
+  EntitySet,
+  EntitySetItem,
   InputSourceKind,
   NavigationView,
   PreviewBlockedFile,
@@ -36,7 +38,8 @@ import type {
   RestoreSource,
   SanitizeMode,
   SanitizeSource,
-  SanitizeResultItem
+  SanitizeResultItem,
+  EntitySetExportResult
 } from "./types";
 
 type StatusTone = "info" | "success" | "warning" | "error";
@@ -81,21 +84,8 @@ interface RestoreState {
   running: boolean;
 }
 
-interface EntityTypeOption {
-  value: string;
-  label: string;
-  prefix: string;
-}
-
-const ENTITY_TYPES: EntityTypeOption[] = [
-  { value: "company", label: "公司", prefix: "ORG" },
-  { value: "person", label: "人名", prefix: "PERSON" },
-  { value: "phone", label: "手机号", prefix: "PHONE" },
-  { value: "idCard", label: "身份证", prefix: "ID" },
-  { value: "address", label: "地址", prefix: "ADDR" },
-  { value: "email", label: "邮箱", prefix: "EMAIL" },
-  { value: "account", label: "账号", prefix: "ACCOUNT" }
-];
+const GENERIC_ENTITY_TYPE = "entity";
+const GENERIC_ENTITY_PREFIX = "ENTITY";
 
 const INITIAL_SANITIZE_STATE: SanitizeState = {
   inputKind: "word",
@@ -128,7 +118,6 @@ const INITIAL_RESTORE_STATE: RestoreState = {
 };
 
 const EMPTY_MANUAL_ENTITY = {
-  type: "company",
   originalValue: "",
   maskedValue: ""
 };
@@ -144,6 +133,8 @@ export default function App() {
   const [sanitize, setSanitize] = useState<SanitizeState>(INITIAL_SANITIZE_STATE);
   const [restore, setRestore] = useState<RestoreState>(INITIAL_RESTORE_STATE);
   const [manualEntity, setManualEntity] = useState(EMPTY_MANUAL_ENTITY);
+  const [entitySets, setEntitySets] = useState<EntitySet[]>([]);
+  const [selectedEntitySetId, setSelectedEntitySetId] = useState("");
 
   useEffect(() => {
     if (!window.desktopApi) {
@@ -155,6 +146,7 @@ export default function App() {
       .getVersion()
       .then(setVersion)
       .catch(() => setVersion("unknown"));
+    loadEntitySets();
   }, []);
 
   const sanitizeStep = useMemo(() => {
@@ -188,8 +180,65 @@ export default function App() {
     return response.data as T;
   }
 
+  async function loadEntitySets() {
+    try {
+      const sets = await callDesktop((api) => api.listEntitySets());
+      setEntitySets(sets);
+      setSelectedEntitySetId((current) => current || sets[0]?.id || "");
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function saveEntitySet(entitySet: EntitySet) {
+    try {
+      const saved = await callDesktop((api) => api.saveEntitySet({ entitySet }));
+      setEntitySets((current) => {
+        const index = current.findIndex((item) => item.id === saved.id);
+        if (index < 0) return [...current, saved];
+        return current.map((item) => (item.id === saved.id ? saved : item));
+      });
+      setSelectedEntitySetId(saved.id);
+      setStatus({ tone: "success", title: "实体集已保存", body: saved.name });
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function deleteSelectedEntitySet(id: string) {
+    try {
+      const sets = await callDesktop((api) => api.deleteEntitySet({ id }));
+      setEntitySets(sets);
+      setSelectedEntitySetId(sets[0]?.id || "");
+      setStatus({ tone: "success", title: "实体集已删除" });
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function importEntitySet(format: "json" | "csv", content: string) {
+    try {
+      const imported = await callDesktop((api) => api.importEntitySet({ format, content }));
+      await loadEntitySets();
+      setSelectedEntitySetId(imported[0]?.id || "");
+      setStatus({ tone: "success", title: "实体集已导入", body: `导入 ${imported.length} 个实体集` });
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function exportEntitySet(id: string, format: "json" | "csv") {
+    try {
+      const exported = await callDesktop((api) => api.exportEntitySet({ id, format }));
+      downloadTextFile(exported);
+      setStatus({ tone: "success", title: "实体集已导出", body: exported.fileName });
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
   function currentSanitizeDocId(state = sanitize) {
-    return state.preview?.files[0]?.docId || "";
+    return state.preview?.files[0]?.docId || (state.inputKind === "word" ? state.files[0]?.docId || "" : "");
   }
 
   function currentSanitizeSource(includeDocId: boolean): SanitizeSource | null {
@@ -336,16 +385,19 @@ export default function App() {
         })
       );
 
-      setSanitize((current) => ({
-        ...current,
-        files: current.inputKind === "word" && current.files[0] && preview.files[0]
-          ? [{ ...current.files[0], docId: preview.files[0].docId }]
-          : current.files,
-        preview,
-        entities: preview.entities,
-        previewing: false,
-        imageContentAcknowledged: false
-      }));
+      setSanitize((current) => {
+        const docId = preview.files[0]?.docId || currentSanitizeDocId(current);
+        return {
+          ...current,
+          files: current.inputKind === "word" && current.files[0] && preview.files[0]
+            ? [{ ...current.files[0], docId: preview.files[0].docId }]
+            : current.files,
+          preview,
+          entities: mergePreviewEntities(preview.entities, current.entities, docId),
+          previewing: false,
+          imageContentAcknowledged: false
+        };
+      });
 
       if (preview.blocked.length) {
         setStatus({
@@ -382,28 +434,6 @@ export default function App() {
     }));
   }
 
-  function updateEntityType(index: number, type: string) {
-    setSanitize((current) => {
-      const target = current.entities[index];
-      if (!target) return current;
-
-      const stableId = nextStableId(type, target.docId, current.entities, index);
-      return {
-        ...current,
-        entities: current.entities.map((entity, entityIndex) =>
-          entityIndex === index
-            ? {
-              ...entity,
-              type,
-              stableId,
-              maskedValue: `<${stableId}>`
-            }
-            : entity
-        )
-      };
-    });
-  }
-
   function removeEntity(index: number) {
     setSanitize((current) => ({
       ...current,
@@ -423,13 +453,13 @@ export default function App() {
       return;
     }
 
-    const stableId = nextStableId(manualEntity.type, docId, sanitize.entities);
+    const stableId = nextStableId(docId, sanitize.entities);
     const maskedValue = manualEntity.maskedValue.trim() || `<${stableId}>`;
     const entity: EntityItem = {
       id: `manual-${Date.now()}`,
       docId,
       filePath: sanitize.inputKind === "word" ? sanitize.files[0]?.path || "" : "pasted-text",
-      type: manualEntity.type,
+      type: GENERIC_ENTITY_TYPE,
       originalValue,
       maskedValue,
       stableId,
@@ -444,6 +474,11 @@ export default function App() {
       entities: [...current.entities, entity]
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
+    setStatus({
+      tone: "success",
+      title: "已添加手动实体",
+      body: `${originalValue} -> ${maskedValue}`
+    });
   }
 
   async function runSanitize() {
@@ -746,7 +781,6 @@ export default function App() {
               onPasswordChange={(password) => setSanitize((current) => ({ ...current, password }))}
               onAddManualEntity={addManualEntity}
               onEntityChange={updateEntity}
-              onEntityTypeChange={updateEntityType}
               onRemoveEntity={removeEntity}
               onImageAckChange={(imageContentAcknowledged) =>
                 setSanitize((current) => ({ ...current, imageContentAcknowledged }))
@@ -771,6 +805,19 @@ export default function App() {
                 setRestore((current) => ({ ...current, credentialMethod }))
               }
               onPasswordChange={(password) => setRestore((current) => ({ ...current, password }))}
+            />
+          )}
+
+          {activeView === "entitySets" && (
+            <EntitySetManager
+              entitySets={entitySets}
+              selectedId={selectedEntitySetId}
+              onSelect={setSelectedEntitySetId}
+              onSave={saveEntitySet}
+              onDelete={deleteSelectedEntitySet}
+              onImport={importEntitySet}
+              onExport={exportEntitySet}
+              onBack={() => openView("dashboard")}
             />
           )}
         </div>
@@ -820,6 +867,12 @@ function Sidebar({
           label="内容还原"
           active={activeView === "restore"}
           onClick={() => onNavigate("restore")}
+        />
+        <NavItem
+          icon={FileText}
+          label="实体集"
+          active={activeView === "entitySets"}
+          onClick={() => onNavigate("entitySets")}
         />
       </div>
 
@@ -1010,7 +1063,6 @@ function SanitizeWorkflow({
   onPasswordChange,
   onAddManualEntity,
   onEntityChange,
-  onEntityTypeChange,
   onRemoveEntity,
   onImageAckChange
 }: {
@@ -1033,13 +1085,15 @@ function SanitizeWorkflow({
   onPasswordChange: (password: string) => void;
   onAddManualEntity: () => void;
   onEntityChange: (index: number, patch: Partial<EntityItem>) => void;
-  onEntityTypeChange: (index: number, type: string) => void;
   onRemoveEntity: (index: number) => void;
   onImageAckChange: (checked: boolean) => void;
 }) {
   const enabledCount = state.entities.filter((entity) => entity.enabled).length;
   const hasInput = state.inputKind === "word" ? state.files.length > 0 : state.pastedText.trim().length > 0;
-  const canAddManualEntity = Boolean(state.preview?.files[0]?.docId);
+  const canAddManualEntity = Boolean(
+    state.preview?.files[0]?.docId ||
+    (state.inputKind === "word" && state.files[0]?.docId)
+  );
   const imageAckRequired = requiresImageAcknowledgement(state.preview);
 
   return (
@@ -1088,7 +1142,6 @@ function SanitizeWorkflow({
             <EntityTable
               entities={state.entities}
               onChange={onEntityChange}
-              onTypeChange={onEntityTypeChange}
               onRemove={onRemoveEntity}
             />
           </Panel>
@@ -1392,6 +1445,292 @@ function Button({
       {Icon && <Icon size={16} />}
       {children}
     </button>
+  );
+}
+
+function EntitySetManager({
+  entitySets,
+  selectedId,
+  onSelect,
+  onSave,
+  onDelete,
+  onImport,
+  onExport,
+  onBack
+}: {
+  entitySets: EntitySet[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  onSave: (entitySet: EntitySet) => void;
+  onDelete: (id: string) => void;
+  onImport: (format: "json" | "csv", content: string) => void;
+  onExport: (id: string, format: "json" | "csv") => void;
+  onBack: () => void;
+}) {
+  const selected = entitySets.find((entitySet) => entitySet.id === selectedId) || entitySets[0] || null;
+  const [draft, setDraft] = useState<EntitySet | null>(selected ? cloneEntitySet(selected) : null);
+
+  useEffect(() => {
+    setDraft(selected ? cloneEntitySet(selected) : null);
+  }, [selected?.id, selected?.updatedAt, entitySets.length]);
+
+  async function handleImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "json";
+    onImport(format, await file.text());
+  }
+
+  function updateItem(index: number, patch: Partial<EntitySetItem>) {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      items: draft.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
+    });
+  }
+
+  function addItem() {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      items: [...draft.items, createBlankEntitySetItem()]
+    });
+  }
+
+  function removeItem(index: number) {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      items: draft.items.filter((_item, itemIndex) => itemIndex !== index)
+    });
+  }
+
+  const enabledItems = draft?.items.filter((item) => item.enabled).length || 0;
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="实体集管理"
+        description="维护常见需脱敏词库，预览识别时自动加入实体确认表"
+        aside={<BackButton onClick={onBack} />}
+      />
+
+      <section className="grid grid-cols-12 gap-5">
+        <div className="col-span-12 space-y-4 xl:col-span-4">
+          <Panel
+            title="实体集"
+            icon={FileText}
+            right={
+              <Button
+                icon={Plus}
+                variant="secondary"
+                onClick={() => onSave(createBlankEntitySet())}
+              >
+                新建
+              </Button>
+            }
+          >
+            <div className="space-y-2">
+              {entitySets.map((entitySet) => (
+                <button
+                  type="button"
+                  key={entitySet.id}
+                  onClick={() => onSelect(entitySet.id)}
+                  className={cn(
+                    "w-full rounded-lg border px-4 py-3 text-left transition",
+                    selected?.id === entitySet.id
+                      ? "border-primary bg-primary-muted text-primary"
+                      : "border-border bg-surface hover:bg-surface-muted"
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-bold">{entitySet.name}</span>
+                    <StatusBadge tone={entitySet.enabled ? "success" : "warning"}>
+                      {entitySet.enabled ? "启用" : "停用"}
+                    </StatusBadge>
+                  </div>
+                  <p className="mt-1 text-xs text-on-surface-muted">
+                    {entitySet.items.length} 条，版本 {entitySet.version}
+                  </p>
+                </button>
+              ))}
+              {!entitySets.length && (
+                <EmptyState icon={FileText} title="暂无实体集" body="新建或导入实体集后显示。" />
+              )}
+            </div>
+          </Panel>
+
+          <Panel title="导入导出" icon={UploadCloud}>
+            <div className="space-y-3">
+              <input
+                id="entity-set-import"
+                type="file"
+                accept=".json,.csv,application/json,text/csv"
+                className="hidden"
+                onChange={handleImport}
+              />
+              <Button
+                icon={UploadCloud}
+                variant="secondary"
+                block
+                onClick={() => document.getElementById("entity-set-import")?.click()}
+              >
+                导入 JSON/CSV
+              </Button>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={!selected}
+                  onClick={() => selected && onExport(selected.id, "json")}
+                >
+                  导出 JSON
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={!selected}
+                  onClick={() => selected && onExport(selected.id, "csv")}
+                >
+                  导出 CSV
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        </div>
+
+        <div className="col-span-12 xl:col-span-8">
+          <Panel
+            title="词库条目"
+            icon={FileCheck2}
+            right={
+              <div className="flex gap-2">
+                <Button icon={Plus} variant="secondary" disabled={!draft} onClick={addItem}>
+                  添加条目
+                </Button>
+                <Button icon={CheckCircle2} disabled={!draft} onClick={() => draft && onSave(draft)}>
+                  保存
+                </Button>
+              </div>
+            }
+          >
+            {draft ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_110px_130px]">
+                  <input
+                    value={draft.name}
+                    onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                    className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                    placeholder="实体集名称"
+                  />
+                  <label className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={draft.enabled}
+                      onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+                      className="h-4 w-4 accent-primary"
+                    />
+                    启用
+                  </label>
+                  <div className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-on-surface-muted">
+                    启用条目 {enabledItems}/{draft.items.length}
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-lg border border-border">
+                  <div className="max-h-[560px] overflow-auto app-scrollbar">
+                    <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+                      <thead className="sticky top-0 z-10 bg-surface-muted text-xs font-bold uppercase text-on-surface-muted">
+                        <tr>
+                          <th className="w-16 border-b border-border px-3 py-3">启用</th>
+                          <th className="w-56 border-b border-border px-3 py-3">实体名称</th>
+                          <th className="w-52 border-b border-border px-3 py-3">别名</th>
+                          <th className="w-44 border-b border-border px-3 py-3">默认脱敏值</th>
+                          <th className="w-40 border-b border-border px-3 py-3">来源</th>
+                          <th className="border-b border-border px-3 py-3">备注</th>
+                          <th className="w-16 border-b border-border px-3 py-3 text-right">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border bg-surface">
+                        {draft.items.map((item, index) => (
+                          <tr key={item.id}>
+                            <td className="px-3 py-3">
+                              <input
+                                type="checkbox"
+                                checked={item.enabled}
+                                onChange={(event) => updateItem(index, { enabled: event.target.checked })}
+                                className="h-4 w-4 accent-primary"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={item.canonicalName}
+                                onChange={(event) => updateItem(index, { canonicalName: event.target.value })}
+                                className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 outline-none focus:border-primary"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={item.aliases.join("|")}
+                                onChange={(event) => updateItem(index, { aliases: splitAliases(event.target.value) })}
+                                className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 outline-none focus:border-primary"
+                                placeholder="用 | 分隔"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={item.maskedValue}
+                                onChange={(event) => updateItem(index, { maskedValue: event.target.value })}
+                                className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 font-mono text-xs outline-none focus:border-primary"
+                                placeholder="留空自动生成"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={item.sourceName}
+                                onChange={(event) => updateItem(index, { sourceName: event.target.value })}
+                                className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 outline-none focus:border-primary"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={item.notes}
+                                onChange={(event) => updateItem(index, { notes: event.target.value })}
+                                className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 outline-none focus:border-primary"
+                              />
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => removeItem(index)}
+                                className="rounded-lg p-2 text-on-surface-muted transition hover:bg-danger-muted hover:text-danger"
+                                title="移除此条目"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="flex justify-between">
+                  <Button variant="secondary" onClick={() => selected && setDraft(cloneEntitySet(selected))}>
+                    撤销未保存修改
+                  </Button>
+                  <Button variant="secondary" disabled={!selected} onClick={() => selected && onDelete(selected.id)}>
+                    删除实体集
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <EmptyState icon={FileText} title="暂无实体集" body="新建或导入实体集后开始维护。" />
+            )}
+          </Panel>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1713,19 +2052,7 @@ function ManualEntityForm({
   disabled: boolean;
 }) {
   return (
-    <div className="mb-4 grid grid-cols-1 gap-3 rounded-lg border border-border bg-surface-muted p-3 md:grid-cols-[150px_1fr_1fr_auto]">
-      <select
-        value={value.type}
-        disabled={disabled}
-        onChange={(event) => onChange({ ...value, type: event.target.value })}
-        className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
-      >
-        {ENTITY_TYPES.map((type) => (
-          <option key={type.value} value={type.value}>
-            {type.label}
-          </option>
-        ))}
-      </select>
+    <div className="mb-4 grid grid-cols-1 gap-3 rounded-lg border border-border bg-surface-muted p-3 md:grid-cols-[1fr_1fr_auto]">
       <input
         value={value.originalValue}
         disabled={disabled}
@@ -1750,12 +2077,10 @@ function ManualEntityForm({
 function EntityTable({
   entities,
   onChange,
-  onTypeChange,
   onRemove
 }: {
   entities: EntityItem[];
   onChange: (index: number, patch: Partial<EntityItem>) => void;
-  onTypeChange: (index: number, type: string) => void;
   onRemove: (index: number) => void;
 }) {
   if (!entities.length) {
@@ -1769,7 +2094,6 @@ function EntityTable({
           <thead className="sticky top-0 z-10 bg-surface-muted text-xs font-bold uppercase text-on-surface-muted">
             <tr>
               <th className="w-16 border-b border-border px-4 py-3">启用</th>
-              <th className="w-32 border-b border-border px-4 py-3">类型</th>
               <th className="border-b border-border px-4 py-3">原文值</th>
               <th className="border-b border-border px-4 py-3">脱敏值</th>
               <th className="w-36 border-b border-border px-4 py-3">稳定 ID</th>
@@ -1787,19 +2111,6 @@ function EntityTable({
                     onChange={(event) => onChange(index, { enabled: event.target.checked })}
                     className="h-4 w-4 accent-primary"
                   />
-                </td>
-                <td className="px-4 py-3">
-                  <select
-                    value={entity.type}
-                    onChange={(event) => onTypeChange(index, event.target.value)}
-                    className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-sm outline-none focus:border-primary"
-                  >
-                    {ENTITY_TYPES.map((type) => (
-                      <option key={type.value} value={type.value}>
-                        {type.label}
-                      </option>
-                    ))}
-                  </select>
                 </td>
                 <td className="px-4 py-3">
                   <input
@@ -1821,8 +2132,8 @@ function EntityTable({
                   </code>
                 </td>
                 <td className="px-4 py-3">
-                  <StatusBadge tone={entity.source === "manual" ? "info" : "success"}>
-                    {entity.source === "manual" ? "手动" : "自动"}
+                  <StatusBadge tone={entitySourceTone(entity.source)}>
+                    {entitySourceLabel(entity.source)}
                   </StatusBadge>
                 </td>
                 <td className="px-4 py-3 text-right">
@@ -2168,12 +2479,93 @@ function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode
   );
 }
 
-function nextStableId(type: string, docId: string, entities: EntityItem[], ignoreIndex = -1) {
-  const prefix = ENTITY_TYPES.find((item) => item.value === type)?.prefix ?? type.toUpperCase();
+function nextStableId(docId: string, entities: EntityItem[], ignoreIndex = -1) {
   const count = entities.filter((entity, index) =>
-    index !== ignoreIndex && entity.docId === docId && entity.type === type
+    index !== ignoreIndex && entity.docId === docId
   ).length + 1;
-  return `${prefix}_${String(count).padStart(3, "0")}`;
+  return `${GENERIC_ENTITY_PREFIX}_${String(count).padStart(3, "0")}`;
+}
+
+function uniqueClientId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function createBlankEntitySet(): EntitySet {
+  const now = new Date().toISOString();
+  return {
+    id: uniqueClientId("entity-set"),
+    name: "新建实体集",
+    enabled: true,
+    version: "1.0.0",
+    updatedAt: now,
+    items: [createBlankEntitySetItem()]
+  };
+}
+
+function createBlankEntitySetItem(): EntitySetItem {
+  return {
+    id: uniqueClientId("entity-item"),
+    type: GENERIC_ENTITY_TYPE,
+    canonicalName: "",
+    aliases: [],
+    maskedValue: "",
+    enabled: true,
+    sourceName: "",
+    sourceUrl: "",
+    notes: ""
+  };
+}
+
+function cloneEntitySet(entitySet: EntitySet): EntitySet {
+  return JSON.parse(JSON.stringify(entitySet)) as EntitySet;
+}
+
+function splitAliases(value: string) {
+  const seen = new Set<string>();
+  return value
+    .split("|")
+    .map((alias) => alias.trim())
+    .filter((alias) => {
+      if (!alias || seen.has(alias)) return false;
+      seen.add(alias);
+      return true;
+    });
+}
+
+function entitySourceLabel(source: EntityItem["source"]) {
+  if (source === "manual") return "手动";
+  if (source === "custom") return "词库";
+  return "自动";
+}
+
+function entitySourceTone(source: EntityItem["source"]): StatusTone {
+  if (source === "manual") return "info";
+  if (source === "custom") return "warning";
+  return "success";
+}
+
+function downloadTextFile(file: EntitySetExportResult) {
+  const blob = new Blob([file.content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = file.fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function mergePreviewEntities(previewEntities: EntityItem[], currentEntities: EntityItem[], docId: string) {
+  const previewKeys = new Set(
+    previewEntities.map((entity) => `${entity.docId}:${entity.originalValue}`)
+  );
+  const manualEntities = currentEntities.filter((entity) => {
+    if (entity.source !== "manual" || entity.docId !== docId) return false;
+    return !previewKeys.has(`${entity.docId}:${entity.originalValue}`);
+  });
+
+  return [...previewEntities, ...manualEntities];
 }
 
 function formatBytes(size: number) {

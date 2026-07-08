@@ -1,4 +1,4 @@
-export type NavigationView = "dashboard" | "sanitize" | "restore";
+export type NavigationView = "dashboard" | "sanitize" | "restore" | "entitySets";
 
 export type SanitizeMode = "irreversible" | "reversible";
 
@@ -53,7 +53,33 @@ export interface EntityItem {
   contextHash?: string;
   locations: EntityLocation[];
   enabled: boolean;
-  source: "auto" | "manual";
+  source: "auto" | "manual" | "custom";
+}
+
+export interface EntitySetItem {
+  id: string;
+  type: string;
+  canonicalName: string;
+  aliases: string[];
+  maskedValue: string;
+  enabled: boolean;
+  sourceName: string;
+  sourceUrl: string;
+  notes: string;
+}
+
+export interface EntitySet {
+  id: string;
+  name: string;
+  enabled: boolean;
+  version: string;
+  updatedAt: string;
+  items: EntitySetItem[];
+}
+
+export interface EntitySetExportResult {
+  fileName: string;
+  content: string;
 }
 
 export interface PreviewBlockedFile {
@@ -76,6 +102,7 @@ export type Credential =
 export interface EntitySummary {
   total: number;
   byType: Record<string, number>;
+  bySource?: Record<string, number>;
 }
 
 export interface SanitizeOutputPaths {
@@ -159,6 +186,21 @@ export interface DesktopApi {
     outputDir: string;
     credential: Credential;
   }) => Promise<ApiResponse<RestoreResult>>;
+  listEntitySets: () => Promise<ApiResponse<EntitySet[]>>;
+  saveEntitySet: (payload: {
+    entitySet: EntitySet;
+  }) => Promise<ApiResponse<EntitySet>>;
+  deleteEntitySet: (payload: {
+    id: string;
+  }) => Promise<ApiResponse<EntitySet[]>>;
+  importEntitySet: (payload: {
+    format: "json" | "csv";
+    content: string;
+  }) => Promise<ApiResponse<EntitySet[]>>;
+  exportEntitySet: (payload: {
+    id: string;
+    format: "json" | "csv";
+  }) => Promise<ApiResponse<EntitySetExportResult>>;
 }
 
 declare global {

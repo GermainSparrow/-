@@ -5,7 +5,7 @@ const entitySchema = z.object({
   id: z.string().min(1),
   docId: z.string().min(1),
   filePath: z.string().min(1),
-  type: z.string().min(1),
+  type: z.string().min(1).optional().default("entity"),
   originalValue: z.string().min(1),
   maskedValue: z.string().min(1),
   stableId: z.string().min(1),
@@ -16,7 +16,28 @@ const entitySchema = z.object({
     length: z.number().int().positive()
   })).default([]),
   enabled: z.boolean().default(true),
-  source: z.enum(["auto", "manual"]).default("auto")
+  source: z.enum(["auto", "manual", "custom"]).default("auto")
+});
+
+const entitySetItemSchema = z.object({
+  id: z.string().min(1).optional(),
+  type: z.string().min(1).optional().default("entity"),
+  canonicalName: z.string().optional().default(""),
+  aliases: z.array(z.string()).default([]),
+  maskedValue: z.string().optional().default(""),
+  enabled: z.boolean().default(true),
+  sourceName: z.string().optional().default(""),
+  sourceUrl: z.string().optional().default(""),
+  notes: z.string().optional().default("")
+});
+
+const entitySetSchema = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+  enabled: z.boolean().default(true),
+  version: z.string().optional().default("1.0.0"),
+  updatedAt: z.string().optional(),
+  items: z.array(entitySetItemSchema).default([])
 });
 
 const documentImportSchema = z.object({
@@ -103,6 +124,24 @@ const restoreRunSchema = z.object({
   credential: credentialSchema
 });
 
+const entitySetSaveSchema = z.object({
+  entitySet: entitySetSchema
+});
+
+const entitySetDeleteSchema = z.object({
+  id: z.string().min(1)
+});
+
+const entitySetImportSchema = z.object({
+  format: z.enum(["json", "csv"]),
+  content: z.string().min(1)
+});
+
+const entitySetExportSchema = z.object({
+  id: z.string().min(1),
+  format: z.enum(["json", "csv"])
+});
+
 function parseWithSchema(schema, payload) {
   const result = schema.safeParse(payload);
   if (!result.success) {
@@ -118,5 +157,9 @@ module.exports = {
   sanitizeRunSchema,
   unlockMappingSchema,
   restoreRunSchema,
+  entitySetSaveSchema,
+  entitySetDeleteSchema,
+  entitySetImportSchema,
+  entitySetExportSchema,
   parseWithSchema
 };

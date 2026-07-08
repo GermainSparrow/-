@@ -1,6 +1,9 @@
 const crypto = require("node:crypto");
 
+const GENERIC_ENTITY_TYPE = "entity";
+
 const TYPE_PREFIX = {
+  entity: "ENTITY",
   company: "ORG",
   person: "PERSON",
   phone: "PHONE",
@@ -11,6 +14,7 @@ const TYPE_PREFIX = {
 };
 
 const TYPE_LABEL = {
+  entity: "实体",
   company: "公司",
   person: "人名",
   phone: "手机号",
@@ -48,7 +52,7 @@ function createDocId(filePath, stat, contentHash) {
 }
 
 function makeStableId(type, index) {
-  const prefix = TYPE_PREFIX[type] || type.toUpperCase();
+  const prefix = TYPE_PREFIX[type || GENERIC_ENTITY_TYPE] || TYPE_PREFIX[GENERIC_ENTITY_TYPE];
   return `${prefix}_${String(index).padStart(3, "0")}`;
 }
 
@@ -62,60 +66,125 @@ function contextHash(text, index, length) {
   return sha256(text.slice(start, end)).slice(0, 16);
 }
 
-function detectEntities(documents) {
-  const byDocAndValue = new Map();
+function addEntitySeed(byDocAndValue, document, segment, originalValue, index, source, maskedValue = "") {
+  const key = `${document.docId}:${originalValue}`;
+  const existing = byDocAndValue.get(key) || {
+    docId: document.docId,
+    filePath: document.path,
+    type: GENERIC_ENTITY_TYPE,
+    originalValue,
+    firstIndex: index,
+    contextHash: contextHash(segment.text, index, originalValue.length),
+    locations: [],
+    source,
+    maskedValue,
+    enabled: true
+  };
 
+  existing.firstIndex = Math.min(existing.firstIndex, index);
+  existing.locations.push({
+    segmentId: segment.id,
+    index,
+    length: originalValue.length
+  });
+  byDocAndValue.set(key, existing);
+}
+
+function detectRuleEntities(documents, byDocAndValue) {
   for (const document of documents) {
     for (const segment of document.textSegments) {
       for (const detector of DETECTORS) {
         detector.pattern.lastIndex = 0;
         let match;
         while ((match = detector.pattern.exec(segment.text)) !== null) {
-          const originalValue = match[0];
-          const key = `${document.docId}:${detector.type}:${originalValue}`;
-          const existing = byDocAndValue.get(key) || {
-            docId: document.docId,
-            filePath: document.path,
-            type: detector.type,
-            originalValue,
-            firstIndex: match.index,
-            contextHash: contextHash(segment.text, match.index, originalValue.length),
-            locations: [],
-            source: "auto",
-            enabled: true
-          };
-
-          existing.locations.push({
-            segmentId: segment.id,
-            index: match.index,
-            length: originalValue.length
-          });
-          byDocAndValue.set(key, existing);
+          addEntitySeed(byDocAndValue, document, segment, match[0], match.index, "auto");
         }
       }
     }
   }
+}
+
+function collectCustomTerms(entitySets = []) {
+  const terms = [];
+  const seen = new Set();
+
+  for (const entitySet of entitySets) {
+    if (entitySet?.enabled === false) continue;
+    for (const item of entitySet?.items || []) {
+      if (item?.enabled === false) continue;
+      const values = [item.canonicalName, ...(item.aliases || [])]
+        .map((value) => String(value || "").trim())
+        .filter((value) => value.length >= 2);
+
+      for (const value of values) {
+        const key = value;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        terms.push({
+          value,
+          maskedValue: String(item.maskedValue || "").trim(),
+          order: terms.length
+        });
+      }
+    }
+  }
+
+  return terms.sort((left, right) => {
+    if (right.value.length !== left.value.length) return right.value.length - left.value.length;
+    return left.order - right.order;
+  });
+}
+
+function overlaps(existingRanges, start, end) {
+  return existingRanges.some((range) => start < range.end && end > range.start);
+}
+
+function detectCustomEntities(documents, entitySets, byDocAndValue) {
+  const terms = collectCustomTerms(entitySets);
+  if (!terms.length) return;
+
+  for (const document of documents) {
+    for (const segment of document.textSegments) {
+      const occupiedRanges = [];
+      for (const term of terms) {
+        let index = segment.text.indexOf(term.value);
+        while (index !== -1) {
+          const end = index + term.value.length;
+          if (!overlaps(occupiedRanges, index, end)) {
+            occupiedRanges.push({ start: index, end });
+            addEntitySeed(byDocAndValue, document, segment, term.value, index, "custom", term.maskedValue);
+          }
+          index = segment.text.indexOf(term.value, index + term.value.length);
+        }
+      }
+    }
+  }
+}
+
+function detectEntities(documents, entitySets = []) {
+  const byDocAndValue = new Map();
+  detectRuleEntities(documents, byDocAndValue);
+  detectCustomEntities(documents, entitySets, byDocAndValue);
 
   const grouped = Array.from(byDocAndValue.values()).sort((left, right) => {
     if (left.docId !== right.docId) return left.docId.localeCompare(right.docId);
-    if (left.type !== right.type) return left.type.localeCompare(right.type);
     return left.firstIndex - right.firstIndex;
   });
 
   const counters = new Map();
   return grouped.map((entity) => {
-    const counterKey = `${entity.docId}:${entity.type}`;
+    const counterKey = entity.docId;
     const nextIndex = (counters.get(counterKey) || 0) + 1;
     counters.set(counterKey, nextIndex);
-    const stableId = makeStableId(entity.type, nextIndex);
+    const stableId = makeStableId(GENERIC_ENTITY_TYPE, nextIndex);
 
     return {
-      id: sha256(`${entity.docId}:${entity.type}:${entity.originalValue}`).slice(0, 16),
+      id: sha256(`${entity.docId}:${entity.originalValue}`).slice(0, 16),
       docId: entity.docId,
       filePath: entity.filePath,
-      type: entity.type,
+      type: GENERIC_ENTITY_TYPE,
       originalValue: entity.originalValue,
-      maskedValue: defaultMaskedValue(stableId),
+      maskedValue: entity.maskedValue || defaultMaskedValue(stableId),
       stableId,
       contextHash: entity.contextHash,
       locations: entity.locations,
@@ -189,7 +258,7 @@ function findOriginalLeaks(text, entities) {
   for (const entity of activeEntities(entities)) {
     if (text.includes(entity.originalValue)) {
       leaks.push({
-        type: entity.type,
+        type: entity.type || GENERIC_ENTITY_TYPE,
         stableId: entity.stableId
       });
     }
@@ -201,12 +270,16 @@ function summarizeEntities(entities) {
   return entities.reduce((summary, entity) => {
     if (entity.enabled === false) return summary;
     summary.total += 1;
-    summary.byType[entity.type] = (summary.byType[entity.type] || 0) + 1;
+    const type = entity.type || GENERIC_ENTITY_TYPE;
+    const source = entity.source || "auto";
+    summary.byType[type] = (summary.byType[type] || 0) + 1;
+    summary.bySource[source] = (summary.bySource[source] || 0) + 1;
     return summary;
-  }, { total: 0, byType: {} });
+  }, { total: 0, byType: {}, bySource: {} });
 }
 
 module.exports = {
+  GENERIC_ENTITY_TYPE,
   TYPE_LABEL,
   applyRestoration,
   applySanitization,

@@ -1,0 +1,611 @@
+[
+  {
+    "id": "builtin-shudao-companies",
+    "name": "蜀道系公司实体集",
+    "enabled": true,
+    "version": "2026.07.08",
+    "updatedAt": "2026-07-08T00:00:00.000Z",
+    "items": [
+      {
+        "id": "shudao-group",
+        "type": "company",
+        "canonicalName": "蜀道投资集团有限责任公司",
+        "aliases": ["蜀道集团"],
+        "enabled": true,
+        "sourceName": "蜀道集团简介",
+        "sourceUrl": "https://www.shudaojt.com/jtjj.html",
+        "notes": "集团官网简介；公开披露所属各级全资和控股企业604家，首版仅内置官方可追溯名称。"
+      },
+      {
+        "id": "shudao-sichuan-expressway",
+        "type": "company",
+        "canonicalName": "四川高速公路建设开发集团有限公司",
+        "aliases": ["川高公司"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业；四川路桥年报释义列为川高公司。"
+      },
+      {
+        "id": "shudao-srbc-listed",
+        "type": "company",
+        "canonicalName": "四川路桥建设集团股份有限公司",
+        "aliases": ["四川路桥", "路桥股份"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "A股上市公司，证券简称四川路桥。"
+      },
+      {
+        "id": "shudao-cygs",
+        "type": "company",
+        "canonicalName": "四川成渝高速公路股份有限公司",
+        "aliases": ["四川成渝"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-shugao",
+        "type": "company",
+        "canonicalName": "四川蜀道高速公路集团有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-zanggao",
+        "type": "company",
+        "canonicalName": "四川藏区高速公路集团有限责任公司",
+        "aliases": ["四川藏区高速公路有限责任公司", "藏高集团", "藏高公司"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥年报释义注明曾用名四川藏区高速公路有限责任公司。"
+      },
+      {
+        "id": "shudao-rail-investment",
+        "type": "company",
+        "canonicalName": "四川蜀道铁路投资集团有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-rail-transit",
+        "type": "company",
+        "canonicalName": "四川蜀道轨道交通集团有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-rail-operation",
+        "type": "company",
+        "canonicalName": "四川蜀道铁路运营管理集团有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-urban-rural",
+        "type": "company",
+        "canonicalName": "四川蜀道城乡投资集团有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-logistics",
+        "type": "company",
+        "canonicalName": "四川蜀道物流集团有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-traffic-service",
+        "type": "company",
+        "canonicalName": "蜀道交通服务集团有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-capital",
+        "type": "company",
+        "canonicalName": "蜀道资本控股集团有限公司",
+        "aliases": ["蜀道资本"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "蜀道集团直属企业；四川路桥年报释义列为蜀道资本。"
+      },
+      {
+        "id": "shudao-smart-transport",
+        "type": "company",
+        "canonicalName": "蜀道智慧交通集团",
+        "aliases": ["四川蜀道智慧交通集团有限公司"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；蜀道集团债券年度报告",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "集团官网直属企业页展示为蜀道智慧交通集团。"
+      },
+      {
+        "id": "shudao-highway-design",
+        "type": "company",
+        "canonicalName": "四川省公路规划勘察设计研究院有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-traffic-design",
+        "type": "company",
+        "canonicalName": "四川省交通勘察设计研究院有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-supervision",
+        "type": "company",
+        "canonicalName": "四川公路工程咨询监理有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-jiaotou-design",
+        "type": "company",
+        "canonicalName": "四川交投设计咨询研究院有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-equipment",
+        "type": "company",
+        "canonicalName": "四川蜀道装备科技股份有限公司",
+        "aliases": ["蜀道装备"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；蜀道集团简介",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业；集团官网简介列为上市公司简称。"
+      },
+      {
+        "id": "shudao-zhilian",
+        "type": "company",
+        "canonicalName": "蜀道智联公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业页公开名称。"
+      },
+      {
+        "id": "shudao-education",
+        "type": "company",
+        "canonicalName": "四川蜀道教育管理有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-road-network-center",
+        "type": "company",
+        "canonicalName": "蜀道集团路网运行中心",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属单位。"
+      },
+      {
+        "id": "shudao-chuanrui",
+        "type": "company",
+        "canonicalName": "四川省川瑞发展投资有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-beijing-branch",
+        "type": "company",
+        "canonicalName": "蜀道投资集团有限责任公司北京分公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属分公司。"
+      },
+      {
+        "id": "shudao-ruihua-199",
+        "type": "company",
+        "canonicalName": "成都瑞华一九九商业管理有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-groupama",
+        "type": "company",
+        "canonicalName": "安盟财产保险有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-hongda-listed",
+        "type": "company",
+        "canonicalName": "四川宏达股份有限公司",
+        "aliases": ["宏达股份"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；蜀道集团简介",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业；集团官网简介列为上市公司简称。"
+      },
+      {
+        "id": "shudao-hongda-group",
+        "type": "company",
+        "canonicalName": "四川宏达(集团)有限公司",
+        "aliases": ["四川宏达集团有限公司"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_2.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "shudao-mining",
+        "type": "company",
+        "canonicalName": "四川蜀道矿业集团股份有限公司",
+        "aliases": ["蜀道矿业"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "蜀道集团直属企业；四川路桥年报释义列为蜀道矿业。"
+      },
+      {
+        "id": "shudao-clean-energy",
+        "type": "company",
+        "canonicalName": "四川蜀道清洁能源集团有限公司",
+        "aliases": ["蜀道清洁能源"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "蜀道集团直属企业；四川路桥年报释义列为蜀道清洁能源。"
+      },
+      {
+        "id": "shudao-xinzhu-listed",
+        "type": "company",
+        "canonicalName": "成都市新筑路桥机械股份有限公司",
+        "aliases": ["新筑股份"],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开；四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "蜀道集团直属企业；四川路桥年报释义列为新筑股份。"
+      },
+      {
+        "id": "shudao-shengtian",
+        "type": "company",
+        "canonicalName": "四川晟天新能源发展有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "蜀道集团直属企业信息公开",
+        "sourceUrl": "https://www.shudaojt.com/xxgkzsqy/index_3.html",
+        "notes": "蜀道集团直属企业。"
+      },
+      {
+        "id": "srbc-road-bridge-group",
+        "type": "company",
+        "canonicalName": "四川公路桥梁建设集团有限公司",
+        "aliases": ["路桥集团", "路桥集团公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-jiaojian",
+        "type": "company",
+        "canonicalName": "四川省交通建设集团股份有限公司",
+        "aliases": ["交建集团"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-chuanjiao",
+        "type": "company",
+        "canonicalName": "四川川交路桥有限责任公司",
+        "aliases": ["川交公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-east-china",
+        "type": "company",
+        "canonicalName": "四川路桥华东建设有限责任公司",
+        "aliases": ["华东公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-luhang",
+        "type": "company",
+        "canonicalName": "四川路航建设工程有限责任公司",
+        "aliases": ["四川路航", "路航公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告；四川路航公司简介",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/gsjj.html",
+        "notes": "四川路桥下属公司；四川路航官网披露蜀道集团持股13.14%、四川路桥持股86.86%。"
+      },
+      {
+        "id": "srbc-shengtong",
+        "type": "company",
+        "canonicalName": "四川路桥盛通建筑工程有限公司",
+        "aliases": ["盛通公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-railway-construction",
+        "type": "company",
+        "canonicalName": "四川省铁路建设有限公司",
+        "aliases": ["铁建公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-xinzhu-tech",
+        "type": "company",
+        "canonicalName": "成都市新筑交通科技有限公司",
+        "aliases": ["新筑交科"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥年报释义列示。"
+      },
+      {
+        "id": "srbc-chengdemian",
+        "type": "company",
+        "canonicalName": "四川成德绵高速公路开发有限公司",
+        "aliases": ["成德绵公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-jiangxigu",
+        "type": "company",
+        "canonicalName": "贵州江习古高速公路开发有限公司",
+        "aliases": ["江习古公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-chengzilu",
+        "type": "company",
+        "canonicalName": "四川成自泸高速公路开发有限责任公司",
+        "aliases": ["成自泸公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-neiweirong",
+        "type": "company",
+        "canonicalName": "四川内威荣高速公路开发有限公司",
+        "aliases": ["内威荣公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-zilong",
+        "type": "company",
+        "canonicalName": "四川自隆高速公路开发有限公司",
+        "aliases": ["自隆公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-smart-construction",
+        "type": "company",
+        "canonicalName": "四川智能建造科技股份有限公司",
+        "aliases": ["智能建造公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-meishan-tianhuan",
+        "type": "company",
+        "canonicalName": "眉山天环基础设施项目开发有限责任公司",
+        "aliases": ["眉山天环公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "srbc-steel-structure",
+        "type": "company",
+        "canonicalName": "四川省钢构智造有限公司",
+        "aliases": ["钢构公司"],
+        "enabled": true,
+        "sourceName": "四川路桥2025年年度报告",
+        "sourceUrl": "https://stockmc.xueqiu.com/202604/600039_20260425_G0NP.pdf",
+        "notes": "四川路桥下属公司。"
+      },
+      {
+        "id": "luhang-xinyi-road-investment",
+        "type": "company",
+        "canonicalName": "四川欣仪公路投资有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-shunpeng-road",
+        "type": "company",
+        "canonicalName": "南充顺蓬公路投资有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-yingshun-road",
+        "type": "company",
+        "canonicalName": "南充营顺公路建设有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-wuqianmu-road",
+        "type": "company",
+        "canonicalName": "乐山市五通桥区五犍沐公路投资有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-tibet-branch",
+        "type": "company",
+        "canonicalName": "四川路航建设工程有限责任公司西藏分公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-xinshun-materials",
+        "type": "company",
+        "canonicalName": "四川欣顺建材有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位；全资子公司。"
+      },
+      {
+        "id": "luhang-testing",
+        "type": "company",
+        "canonicalName": "四川路航建设工程试验检测有限公司",
+        "aliases": ["四川路航建设工程试验检测公司"],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-second-branch",
+        "type": "company",
+        "canonicalName": "四川路航建设工程有限责任公司二分公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-first-branch",
+        "type": "company",
+        "canonicalName": "四川路航建设工程有限责任公司一分公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位。"
+      },
+      {
+        "id": "luhang-sanjiang",
+        "type": "company",
+        "canonicalName": "四川三江交通建设工程有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位；全资子公司。"
+      },
+      {
+        "id": "luhang-shutong-port",
+        "type": "company",
+        "canonicalName": "四川蜀通港口航道工程建设有限公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位；全资子公司。"
+      },
+      {
+        "id": "luhang-gangjian-water",
+        "type": "company",
+        "canonicalName": "四川港建水利水电工程有限责任公司",
+        "aliases": [],
+        "enabled": true,
+        "sourceName": "四川路航成员单位",
+        "sourceUrl": "https://www.sclh.com.cn/xxgk/jbxx/zsgs.html",
+        "notes": "四川路航官网成员单位；全资控股子公司。"
+      }
+    ]
+  }
+]

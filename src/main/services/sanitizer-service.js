@@ -12,6 +12,7 @@ const {
   summarizeEntities
 } = require("./entity-service");
 const { createReport, writeReport } = require("./report-service");
+const { listEntitySets } = require("./entity-set-service");
 const {
   createUniqueOutputPath,
   extractDocument,
@@ -139,7 +140,7 @@ async function previewSanitization(source) {
     sourceLabel: sourceLabel(source),
     files: documents.map(publicDocumentSummary),
     blocked,
-    entities: detectEntities(documents)
+    entities: detectEntities(documents, await listEntitySets())
   };
 }
 

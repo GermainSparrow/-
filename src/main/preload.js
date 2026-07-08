@@ -21,5 +21,10 @@ contextBridge.exposeInMainWorld("desktopApi", {
   runSanitize: (payload) => ipcRenderer.invoke("sanitize:run", payload),
   selectOutputDirectory: () => ipcRenderer.invoke("output:select-directory"),
   unlockMapping: (payload) => ipcRenderer.invoke("mapping:unlock", payload),
-  runRestore: (payload) => ipcRenderer.invoke("restore:run", payload)
+  runRestore: (payload) => ipcRenderer.invoke("restore:run", payload),
+  listEntitySets: () => ipcRenderer.invoke("entity-sets:list"),
+  saveEntitySet: (payload) => ipcRenderer.invoke("entity-sets:save", payload),
+  deleteEntitySet: (payload) => ipcRenderer.invoke("entity-sets:delete", payload),
+  importEntitySet: (payload) => ipcRenderer.invoke("entity-sets:import", payload),
+  exportEntitySet: (payload) => ipcRenderer.invoke("entity-sets:export", payload)
 });
