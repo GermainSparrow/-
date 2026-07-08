@@ -56,8 +56,62 @@ function makeStableId(type, index) {
   return `${prefix}_${String(index).padStart(3, "0")}`;
 }
 
-function defaultMaskedValue(stableId) {
-  return `<${stableId}>`;
+function alphabeticLabel(index) {
+  let value = Math.max(1, Number(index) || 1);
+  let result = "";
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
+}
+
+function stableIdNumber(stableId) {
+  const match = /_(\d+)$/.exec(String(stableId || ""));
+  return match ? Number(match[1]) : 1;
+}
+
+function organizationMaskSuffix(originalValue) {
+  const value = String(originalValue || "").trim();
+  if (!/[\u4e00-\u9fff]/.test(value)) return "";
+  if (/(?:\u516c\u53f8|\u6709\u9650\u516c\u53f8|\u6709\u9650\u8d23\u4efb\u516c\u53f8|\u80a1\u4efd\u6709\u9650\u516c\u53f8|\u5206\u516c\u53f8|\u5b50\u516c\u53f8)$/.test(value)) {
+    return "\u516c\u53f8";
+  }
+  if (/\u96c6\u56e2$/.test(value)) return "\u96c6\u56e2";
+  if (/\u9879\u76ee\u90e8$/.test(value)) return "\u9879\u76ee\u90e8";
+  if (/\u4e2d\u5fc3$/.test(value)) return "\u4e2d\u5fc3";
+  if (/\u7814\u7a76\u9662$/.test(value)) return "\u7814\u7a76\u9662";
+  if (/\u8bbe\u8ba1\u9662$/.test(value)) return "\u8bbe\u8ba1\u9662";
+  if (/\u5b66\u9662$/.test(value)) return "\u5b66\u9662";
+  if (/\u533b\u9662$/.test(value)) return "\u533b\u9662";
+  if (/\u5c40$/.test(value)) return "\u5c40";
+  if (/(?:\u8def\u6865|\u8def\u822a|\u8700\u9053|\u5efa\u8bbe|\u5de5\u7a0b|\u6295\u8d44|\u4ea4\u901a|\u9ad8\u901f|\u94c1\u8def|\u7269\u6d41|\u8fd0\u8425|\u7ba1\u7406)/.test(value)) {
+    return "\u516c\u53f8";
+  }
+  return "";
+}
+
+function placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues) {
+  const primary = `<${stableId}>`;
+  if (!occupiedValues.has(primary) && !usedMaskedValues.has(primary)) return primary;
+  const fallback = `<${stableId}_MASKED>`;
+  if (!occupiedValues.has(fallback) && !usedMaskedValues.has(fallback)) return fallback;
+  return `<${stableId}_${sha256(`${stableId}:masked`).slice(0, 6)}>`;
+}
+
+function defaultMaskedValue(originalValue, stableId, occupiedValues = new Set(), usedMaskedValues = new Set()) {
+  const suffix = organizationMaskSuffix(originalValue);
+  if (suffix) {
+    const startIndex = stableIdNumber(stableId);
+    for (let offset = 0; offset < 1000; offset += 1) {
+      const candidate = `${alphabeticLabel(startIndex + offset)}${suffix}`;
+      if (candidate !== originalValue && !occupiedValues.has(candidate) && !usedMaskedValues.has(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues);
 }
 
 function contextHash(text, index, length) {
@@ -172,11 +226,24 @@ function detectEntities(documents, entitySets = []) {
   });
 
   const counters = new Map();
+  const occupiedValues = new Set(grouped.map((entity) => entity.originalValue));
+  const usedMaskedValues = new Set(
+    grouped
+      .map((entity) => String(entity.maskedValue || "").trim())
+      .filter(Boolean)
+  );
   return grouped.map((entity) => {
     const counterKey = entity.docId;
     const nextIndex = (counters.get(counterKey) || 0) + 1;
     counters.set(counterKey, nextIndex);
     const stableId = makeStableId(GENERIC_ENTITY_TYPE, nextIndex);
+    const maskedValue = entity.maskedValue || defaultMaskedValue(
+      entity.originalValue,
+      stableId,
+      occupiedValues,
+      usedMaskedValues
+    );
+    usedMaskedValues.add(maskedValue);
 
     return {
       id: sha256(`${entity.docId}:${entity.originalValue}`).slice(0, 16),
@@ -184,7 +251,7 @@ function detectEntities(documents, entitySets = []) {
       filePath: entity.filePath,
       type: GENERIC_ENTITY_TYPE,
       originalValue: entity.originalValue,
-      maskedValue: entity.maskedValue || defaultMaskedValue(stableId),
+      maskedValue,
       stableId,
       contextHash: entity.contextHash,
       locations: entity.locations,

@@ -109,6 +109,7 @@ test("detects structured entities and replaces longer strings first", () => {
   assert.ok(detected.some((entity) => entity.originalValue === "6222021234567890123"));
   assert.ok(detected.every((entity) => entity.type === "entity"));
   assert.deepEqual(detected.map((entity) => entity.stableId), ["ENTITY_001", "ENTITY_002", "ENTITY_003"]);
+  assert.deepEqual(detected.map((entity) => entity.maskedValue), ["<ENTITY_001>", "<ENTITY_002>", "<ENTITY_003>"]);
 
   const text = "李明和明";
   const result = applySanitization(text, [
@@ -156,6 +157,103 @@ test("detects custom entity set entries with longest match and deduplication", (
   assert.equal(byValue.get("四川路航").locations.length, 1);
   assert.ok(detected.every((entity) => entity.type === "entity"));
   assert.equal(byValue.get("四川路桥").source, "custom");
+});
+
+test("generates organization-style masked values for custom entity defaults", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "\u56db\u5ddd\u8def\u822a\u516c\u53f8\u3001\u8700\u9053\u96c6\u56e2\u3001\u56db\u5ddd\u8def\u6865\u9700\u8981\u8131\u654f\u3002"
+    }]
+  }];
+  const entitySets = [{
+    id: "set1",
+    name: "\u673a\u6784\u8bcd\u5e93",
+    enabled: true,
+    items: [
+      {
+        id: "item1",
+        type: "entity",
+        canonicalName: "\u56db\u5ddd\u8def\u822a",
+        aliases: ["\u56db\u5ddd\u8def\u822a\u516c\u53f8"],
+        enabled: true
+      },
+      {
+        id: "item2",
+        type: "entity",
+        canonicalName: "\u8700\u9053\u96c6\u56e2",
+        aliases: [],
+        enabled: true
+      },
+      {
+        id: "item3",
+        type: "entity",
+        canonicalName: "\u56db\u5ddd\u8def\u6865",
+        aliases: [],
+        enabled: true
+      }
+    ]
+  }];
+
+  const byValue = new Map(detectEntities(documents, entitySets).map((entity) => [entity.originalValue, entity]));
+  assert.equal(byValue.get("\u56db\u5ddd\u8def\u822a\u516c\u53f8").maskedValue, "A\u516c\u53f8");
+  assert.equal(byValue.get("\u8700\u9053\u96c6\u56e2").maskedValue, "B\u96c6\u56e2");
+  assert.equal(byValue.get("\u56db\u5ddd\u8def\u6865").maskedValue, "C\u516c\u53f8");
+});
+
+test("avoids organization-style masked value collisions with original values", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "A\u516c\u53f8\u3001\u56db\u5ddd\u8def\u822a\u516c\u53f8\u3001B\u516c\u53f8\u9700\u8981\u8131\u654f\u3002"
+    }]
+  }];
+  const entitySets = [{
+    id: "set1",
+    name: "\u673a\u6784\u8bcd\u5e93",
+    enabled: true,
+    items: [
+      { id: "item1", type: "entity", canonicalName: "A\u516c\u53f8", aliases: [], enabled: true },
+      { id: "item2", type: "entity", canonicalName: "\u56db\u5ddd\u8def\u822a\u516c\u53f8", aliases: [], enabled: true },
+      { id: "item3", type: "entity", canonicalName: "B\u516c\u53f8", aliases: [], enabled: true }
+    ]
+  }];
+
+  const detected = detectEntities(documents, entitySets);
+  const originals = new Set(detected.map((entity) => entity.originalValue));
+  const maskedValues = detected.map((entity) => entity.maskedValue);
+  assert.deepEqual(maskedValues, ["C\u516c\u53f8", "D\u516c\u53f8", "E\u516c\u53f8"]);
+  assert.equal(new Set(maskedValues).size, maskedValues.length);
+  assert.ok(maskedValues.every((maskedValue) => !originals.has(maskedValue)));
+});
+
+test("keeps non-organization custom entity defaults as stable placeholders", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "\u5f20\u4e09\u9700\u8981\u8131\u654f\u3002"
+    }]
+  }];
+  const detected = detectEntities(documents, [{
+    id: "set1",
+    name: "\u4eba\u540d\u8bcd\u5e93",
+    enabled: true,
+    items: [{
+      id: "item1",
+      type: "entity",
+      canonicalName: "\u5f20\u4e09",
+      aliases: [],
+      enabled: true
+    }]
+  }]);
+
+  assert.equal(detected[0].maskedValue, "<ENTITY_001>");
 });
 
 test("custom entity set detection respects disabled sets items and duplicate aliases", () => {
@@ -384,7 +482,7 @@ test("cleans reversible output when mapping credential fails", async () => {
   assert.deepEqual(outputNames.filter((name) => name.includes(".sanitized") || name.includes(".mapping.enc")), []);
 });
 
-test("cleans restored output when restore report write fails", async () => {
+test("restoration does not write a report file", async () => {
   const tempDir = await makeTempDir();
   const mappingPath = path.join(tempDir, "fixture.mapping.enc.json");
   const credential = { method: "password", password: "restore-password" };
@@ -396,30 +494,20 @@ test("cleans restored output when restore report write fails", async () => {
     credential
   }), null, 2), "utf8");
 
-  const originalWriteFile = fs.writeFile;
-  fs.writeFile = async (filePath, ...args) => {
-    if (String(filePath).includes(".restore-report")) {
-      throw new Error("report write failed");
-    }
-    return originalWriteFile(filePath, ...args);
-  };
-
-  try {
-    await assert.rejects(() => runRestoration({
-      source: { kind: "text", text: "负责人<PERSON_001>" },
-      mappingPath,
-      outputDir: tempDir,
-      credential
-    }), /report write failed/);
-  } finally {
-    fs.writeFile = originalWriteFile;
-  }
+  const result = await runRestoration({
+    source: { kind: "text", text: "负责人<PERSON_001>" },
+    mappingPath,
+    outputDir: tempDir,
+    credential
+  });
 
   const outputNames = await fs.readdir(tempDir);
-  assert.deepEqual(outputNames.filter((name) => name.includes(".restored")), []);
+  assert.equal(result.reportPath, null);
+  assert.equal(outputNames.filter((name) => name.includes(".restore-report")).length, 0);
+  assert.equal(outputNames.filter((name) => name.includes(".restored")).length, 1);
 });
 
-test("uses safe output names and reports without source file name", async () => {
+test("uses safe text output names without writing reports", async () => {
   const tempDir = await makeTempDir();
   const text = "负责人李明身份证";
   const preview = await previewSanitization({ kind: "text", text });
@@ -434,10 +522,8 @@ test("uses safe output names and reports without source file name", async () => 
 
   const outputs = result.results[0].outputs;
   assert.doesNotMatch(path.basename(outputs.sanitizedFile), /李明|身份证/);
-  assert.doesNotMatch(path.basename(outputs.reportFile), /李明|身份证/);
-  const reportText = await fs.readFile(outputs.reportFile, "utf8");
-  assert.doesNotMatch(reportText, /李明|身份证/);
-  assert.match(reportText, new RegExp(`document-${docId}`));
+  assert.equal(outputs.reportFile, null);
+  assert.equal((await fs.readdir(tempDir)).filter((name) => name.includes("report")).length, 0);
 });
 
 test("sanitizes and restores docx through source model", async () => {
@@ -460,6 +546,7 @@ test("sanitizes and restores docx through source model", async () => {
     credential
   });
   const outputs = sanitizeResult.results[0].outputs;
+  assert.equal(path.basename(outputs.sanitizedFile), "fixture_已脱敏.docx");
   const sanitized = await extractDocxDocument(outputs.sanitizedFile, "verify");
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 
@@ -469,6 +556,7 @@ test("sanitizes and restores docx through source model", async () => {
     outputDir: tempDir,
     credential
   });
+  assert.equal(path.basename(restoreResult.outputPath), "fixture_已还原.docx");
   const restored = await extractDocxDocument(restoreResult.outputPath, "verify");
   assert.match(restored.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 });
@@ -678,6 +766,24 @@ test("sanitizes docx text nodes", async () => {
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 });
 
+test("does not escape docx structural tags with text-tag prefixes", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "prefix-structure.docx");
+  const outputPath = path.join(tempDir, "prefix-structure.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:topLinePunct w:val="0"/><w:autoSpaceDE/></w:pPr><w:r><w:t>负责人李明</w:t></w:r></w:p></w:body></w:document>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  assert.match(documentXml, /<w:topLinePunct w:val="0"\/>/);
+  assert.match(documentXml, /<w:autoSpaceDE\/>/);
+  assert.doesNotMatch(documentXml, /&lt;w:topLinePunct|&lt;w:autoSpaceDE/);
+  assert.doesNotMatch(documentXml, /李明/);
+});
+
 test("previews docx images but requires acknowledgement before sanitization", async () => {
   const tempDir = await makeTempDir();
   const inputPath = path.join(tempDir, "image.docx");
@@ -699,7 +805,7 @@ test("previews docx images but requires acknowledgement before sanitization", as
     entities: [entity],
     outputDir: tempDir
   }), (error) => error.code === "DOCX_IMAGE_ACK_REQUIRED");
-  assert.deepEqual((await fs.readdir(tempDir)).filter((name) => name.includes(".sanitized")), []);
+  assert.deepEqual((await fs.readdir(tempDir)).filter((name) => name.includes("_已脱敏")), []);
 
   const result = await runSanitization({
     source: { kind: "word", path: inputPath, docId },
@@ -783,6 +889,57 @@ test("blocks docx unconfirmed structured values in any xml part", async () => {
     filePath: inputPath,
     outputPath,
     entities: [manualEntity()]
+  }), /DOCX 脱敏后仍检测到原始敏感信息/);
+  await assert.rejects(() => fs.access(outputPath));
+});
+
+test("ignores docx font table panose numeric metadata during structured leak scan", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "font-table-panose.docx");
+  const outputPath = path.join(tempDir, "font-table-panose.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Alice</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/fontTable.xml", '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Arial"><w:panose1 w:val="020B0604020202020204"/></w:font><w:font w:name="Calibri"><w:panose1 w:val="020F0502020204030204"/></w:font></w:fonts>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity({
+      originalValue: "Alice",
+      maskedValue: "<ENTITY_001>",
+      stableId: "ENTITY_001"
+    })]
+  });
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  const fontTableXml = await sanitizedZip.file("word/fontTable.xml").async("text");
+  assert.doesNotMatch(documentXml, /Alice/);
+  assert.match(documentXml, /ENTITY_001/);
+  assert.match(fontTableXml, /020B0604020202020204/);
+  assert.match(fontTableXml, /020F0502020204030204/);
+});
+
+test("blocks non-panose structured values in docx font table", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "font-table-hidden-account.docx");
+  const outputPath = path.join(tempDir, "font-table-hidden-account.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Alice</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/fontTable.xml", '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="6222021234567890123"><w:panose1 w:val="020B0604020202020204"/></w:font></w:fonts>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await assert.rejects(() => sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity({
+      originalValue: "Alice",
+      maskedValue: "<ENTITY_001>",
+      stableId: "ENTITY_001"
+    })]
   }), /DOCX 脱敏后仍检测到原始敏感信息/);
   await assert.rejects(() => fs.access(outputPath));
 });

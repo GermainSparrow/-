@@ -57,6 +57,13 @@ function isRelationshipPath(fileName) {
   return fileName.endsWith(".rels");
 }
 
+function xmlForStructuredValueScan(fileName, xml) {
+  if (fileName !== "word/fontTable.xml") return xml;
+  return xml.replace(/<w:panose1\b[^>]*>/g, (tag) => {
+    return tag.replace(/\bw:val=(["'])[\s\S]*?\1/g, "w:val=\"\"");
+  });
+}
+
 function hasDocxImages(fileNames) {
   return fileNames.some((name) => name.startsWith("word/media/"));
 }
@@ -221,7 +228,9 @@ async function findXmlLeaksInZip(zip, entities) {
       });
     }
 
-    for (const structuredValue of detectStructuredValues(scanText)) {
+    const structuredXml = xmlForStructuredValueScan(fileName, xml);
+    const structuredScanText = `${structuredXml}\n${decodeXml(structuredXml)}`;
+    for (const structuredValue of detectStructuredValues(structuredScanText)) {
       if (knownOriginalValues.has(structuredValue.originalValue)) continue;
       const leakKey = `${fileName}:${structuredValue.type}:${structuredValue.originalValue}`;
       if (seenStructuredLeaks.has(leakKey)) continue;

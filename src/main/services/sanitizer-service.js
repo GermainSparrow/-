@@ -11,7 +11,6 @@ const {
   findOriginalLeaks,
   summarizeEntities
 } = require("./entity-service");
-const { createReport, writeReport } = require("./report-service");
 const { listEntitySets } = require("./entity-set-service");
 const {
   createUniqueOutputPath,
@@ -43,6 +42,27 @@ function filterEntitiesForDoc(entities, docId) {
 
 function safeDocumentLabel(docId) {
   return `document-${docId}`;
+}
+
+function outputStemForSource(summary) {
+  return summary.sourceKind === "word"
+    ? path.parse(summary.name).name
+    : safeDocumentLabel(summary.docId);
+}
+
+function stripGeneratedWordSuffix(stem) {
+  return String(stem || "")
+    .replace(/_已脱敏(?:-\d+)?$/u, "")
+    .replace(/\.sanitized(?:-\d+)?$/u, "");
+}
+
+function restoreOutputStemForSource(source, mapping) {
+  if (source.kind !== "word") return safeDocumentLabel(mapping.docId);
+  const sourceFileName = String(mapping.sourceFileName || "").trim();
+  const stem = sourceFileName
+    ? path.parse(sourceFileName).name
+    : stripGeneratedWordSuffix(path.parse(source.path).name);
+  return stem || safeDocumentLabel(mapping.docId);
 }
 
 function createTextDocId(text) {
@@ -221,7 +241,7 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
         credential
       })
       : null;
-    const outputStem = safeDocumentLabel(summary.docId);
+    const outputStem = outputStemForSource(summary);
 
     const sanitizeResult = await sanitizeSource({
       source,
@@ -243,17 +263,6 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
       writtenPaths.push(outputs.mappingFile);
       await fs.writeFile(outputs.mappingFile, JSON.stringify(mappingPackage, null, 2), "utf8");
     }
-
-    outputs.reportFile = await createUniqueOutputPath(summary.name, outputDir, ".sanitization-report", ".json", outputStem);
-    writtenPaths.push(outputs.reportFile);
-    const report = createReport({
-      sourceLabel: outputStem,
-      mode,
-      entities: docEntities,
-      warnings: sanitizeResult.warnings,
-      outputs
-    });
-    await writeReport(outputs.reportFile, report);
 
     return {
       results: [
@@ -332,7 +341,7 @@ async function runRestoration({ source, mappingPath, outputDir, credential }) {
   try {
     const mappingPackage = JSON.parse(await fs.readFile(mappingPath, "utf8"));
     const mapping = decryptMappingPackage(mappingPackage, credential);
-    const outputStem = safeDocumentLabel(mapping.docId);
+    const outputStem = restoreOutputStemForSource(source, mapping);
     const restoreResult = await restoreSource({
       source,
       outputDir,
@@ -341,25 +350,11 @@ async function runRestoration({ source, mappingPath, outputDir, credential }) {
     });
     writtenPaths.push(restoreResult.outputPath);
 
-    const reportPath = await createUniqueOutputPath(sourceLabel(source), outputDir, ".restore-report", ".json", outputStem);
-    writtenPaths.push(reportPath);
-    await writeReport(reportPath, createReport({
-      sourceLabel: outputStem,
-      mode: "restore",
-      entities: mapping.entities,
-      warnings: restoreResult.warnings,
-      outputs: {
-        restoredFile: restoreResult.outputPath,
-        mappingFile: path.basename(mappingPath),
-        reportFile: reportPath
-      }
-    }));
-
     return {
       sourceKind: source.kind,
       sourceLabel: sourceLabel(source),
       outputPath: restoreResult.outputPath,
-      reportPath,
+      reportPath: null,
       warnings: restoreResult.warnings,
       entitySummary: summarizeEntities(mapping.entities),
       restoredText: restoreResult.restoredText || null

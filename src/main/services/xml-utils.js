@@ -21,7 +21,7 @@ const XML_TEXT_TAGS = [
 ];
 
 const XML_TEXT_PATTERN = new RegExp(
-  `<(${XML_TEXT_TAGS.map((tag) => tag.replace(":", "\\:")).join("|")})([^>]*)>([\\s\\S]*?)<\\/\\1>`,
+  `<(${XML_TEXT_TAGS.map((tag) => tag.replace(":", "\\:")).join("|")})(\\s[^>]*)?>([\\s\\S]*?)<\\/\\1>`,
   "g"
 );
 const XML_CDATA_OR_COMMENT_PATTERN = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->/g;
@@ -182,7 +182,7 @@ function collectXmlText(xml) {
 
 function transformXmlText(xml, transform) {
   return xml.replace(XML_TEXT_PATTERN, (_full, tag, attrs, inner) => {
-    return `<${tag}${attrs}>${encodeXml(transform(decodeXml(inner)))}</${tag}>`;
+    return `<${tag}${attrs || ""}>${encodeXml(transform(decodeXml(inner)))}</${tag}>`;
   });
 }
 

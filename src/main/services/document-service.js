@@ -86,7 +86,7 @@ async function sanitizeDocument({ filePath, outputDir, entities, outputStem = nu
   const outputPath = await createUniqueOutputPath(
     filePath,
     outputDir,
-    ".sanitized",
+    "_已脱敏",
     WORD_EXTENSION,
     outputStem
   );
@@ -104,7 +104,7 @@ async function restoreDocument({ filePath, outputDir, entities, outputStem = nul
   const outputPath = await createUniqueOutputPath(
     filePath,
     outputDir,
-    ".restored",
+    "_已还原",
     WORD_EXTENSION,
     outputStem
   );

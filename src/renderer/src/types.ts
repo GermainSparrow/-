@@ -138,7 +138,7 @@ export interface RestoreResult {
   sourceKind: InputSourceKind;
   sourceLabel: string;
   outputPath: string;
-  reportPath: string;
+  reportPath: string | null;
   warnings: string[];
   entitySummary: EntitySummary;
   restoredText: string | null;

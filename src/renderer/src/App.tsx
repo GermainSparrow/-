@@ -454,7 +454,7 @@ export default function App() {
     }
 
     const stableId = nextStableId(docId, sanitize.entities);
-    const maskedValue = manualEntity.maskedValue.trim() || `<${stableId}>`;
+    const maskedValue = manualEntity.maskedValue.trim() || defaultMaskedValue(originalValue, stableId, sanitize.entities);
     const entity: EntityItem = {
       id: `manual-${Date.now()}`,
       docId,
@@ -747,8 +747,6 @@ export default function App() {
       <Sidebar activeView={activeView} version={version} onNavigate={openView} />
       <main className="ml-[260px] h-screen overflow-y-auto app-scrollbar">
         <div className="mx-auto max-w-6xl px-8 py-7">
-          {status && <StatusPanel status={status} onClose={() => setStatus(null)} />}
-
           {activeView === "dashboard" && (
             <Dashboard
               onStartSanitize={() => openView("sanitize")}
@@ -822,6 +820,7 @@ export default function App() {
           )}
         </div>
       </main>
+      {status && <StatusPanel status={status} onClose={() => setStatus(null)} />}
     </div>
   );
 }
@@ -969,8 +968,7 @@ function Dashboard({
               {restoreResult && (
                 <PathList
                   rows={[
-                    ["还原文件", restoreResult.outputPath],
-                    ["报告", restoreResult.reportPath]
+                    ["还原文件", restoreResult.outputPath]
                   ]}
                 />
               )}
@@ -1278,8 +1276,7 @@ function RestoreWorkflow({
                 </div>
                 <PathList
                   rows={[
-                    ["还原文件", state.result.outputPath],
-                    ["报告", state.result.reportPath]
+                    ["还原文件", state.result.outputPath]
                   ]}
                 />
                 {state.result.restoredText ? (
@@ -1290,7 +1287,7 @@ function RestoreWorkflow({
                 )}
               </div>
             ) : (
-              <EmptyState icon={RotateCcw} title="等待还原" body="还原文件和报告路径会在任务完成后显示。" />
+              <EmptyState icon={RotateCcw} title="等待还原" body="还原文件路径会在任务完成后显示。" />
             )}
           </Panel>
         </div>
@@ -2168,7 +2165,7 @@ function ModeSelector({ mode, onChange }: { mode: SanitizeMode; onChange: (mode:
       <SelectableOption
         selected={mode === "reversible"}
         title="可恢复实体脱敏"
-        description="导出脱敏文件、加密映射文件和报告。"
+        description="导出脱敏文件和加密映射文件。"
         tone="success"
         onClick={() => onChange("reversible")}
       />
@@ -2363,8 +2360,7 @@ function OutputGroup({ result }: { result: SanitizeResultItem }) {
       <PathList
         rows={[
           ["脱敏文件", result.outputs.sanitizedFile],
-          result.outputs.mappingFile ? ["映射文件", result.outputs.mappingFile] : null,
-          result.outputs.reportFile ? ["报告", result.outputs.reportFile] : null
+          result.outputs.mappingFile ? ["映射文件", result.outputs.mappingFile] : null
         ].filter((row): row is [string, string] => Boolean(row))}
       />
       {result.sanitizedText ? <div className="mt-4"><TextResult title="脱敏文本" value={result.sanitizedText} /></div> : null}
@@ -2435,15 +2431,22 @@ function StatusPanel({ status, onClose }: { status: StatusMessage; onClose: () =
         : ShieldCheck;
 
   return (
-    <div className={cn("mb-5 rounded-lg border px-4 py-3", styles[status.tone])}>
+    <div
+      role="alert"
+      aria-live="assertive"
+      className={cn(
+        "fixed right-6 top-6 z-50 w-[min(calc(100vw-32px),440px)] rounded-lg border px-4 py-3 shadow-xl",
+        styles[status.tone]
+      )}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="flex gap-3">
           <Icon size={18} className="mt-0.5 shrink-0" />
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-bold">{status.title}</p>
             {status.body && <p className="mt-1 whitespace-pre-wrap text-sm opacity-90">{status.body}</p>}
             {status.details?.length ? (
-              <ul className="mt-2 space-y-1 text-xs opacity-90">
+              <ul className="mt-2 max-h-48 space-y-1 overflow-auto pr-1 text-xs opacity-90 app-scrollbar">
                 {status.details.map((detail) => (
                   <li key={detail}>{detail}</li>
                 ))}
@@ -2484,6 +2487,77 @@ function nextStableId(docId: string, entities: EntityItem[], ignoreIndex = -1) {
     index !== ignoreIndex && entity.docId === docId
   ).length + 1;
   return `${GENERIC_ENTITY_PREFIX}_${String(count).padStart(3, "0")}`;
+}
+
+function alphabeticLabel(index: number) {
+  let value = Math.max(1, Number(index) || 1);
+  let result = "";
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
+}
+
+function stableIdNumber(stableId: string) {
+  const match = /_(\d+)$/.exec(stableId);
+  return match ? Number(match[1]) : 1;
+}
+
+function organizationMaskSuffix(originalValue: string) {
+  const value = originalValue.trim();
+  if (!/[\u4e00-\u9fff]/.test(value)) return "";
+  if (/(?:\u516c\u53f8|\u6709\u9650\u516c\u53f8|\u6709\u9650\u8d23\u4efb\u516c\u53f8|\u80a1\u4efd\u6709\u9650\u516c\u53f8|\u5206\u516c\u53f8|\u5b50\u516c\u53f8)$/.test(value)) {
+    return "\u516c\u53f8";
+  }
+  if (/\u96c6\u56e2$/.test(value)) return "\u96c6\u56e2";
+  if (/\u9879\u76ee\u90e8$/.test(value)) return "\u9879\u76ee\u90e8";
+  if (/\u4e2d\u5fc3$/.test(value)) return "\u4e2d\u5fc3";
+  if (/\u7814\u7a76\u9662$/.test(value)) return "\u7814\u7a76\u9662";
+  if (/\u8bbe\u8ba1\u9662$/.test(value)) return "\u8bbe\u8ba1\u9662";
+  if (/\u5b66\u9662$/.test(value)) return "\u5b66\u9662";
+  if (/\u533b\u9662$/.test(value)) return "\u533b\u9662";
+  if (/\u5c40$/.test(value)) return "\u5c40";
+  if (/(?:\u8def\u6865|\u8def\u822a|\u8700\u9053|\u5efa\u8bbe|\u5de5\u7a0b|\u6295\u8d44|\u4ea4\u901a|\u9ad8\u901f|\u94c1\u8def|\u7269\u6d41|\u8fd0\u8425|\u7ba1\u7406)/.test(value)) {
+    return "\u516c\u53f8";
+  }
+  return "";
+}
+
+function placeholderMaskedValue(stableId: string, occupiedValues: Set<string>, usedMaskedValues: Set<string>) {
+  const primary = `<${stableId}>`;
+  if (!occupiedValues.has(primary) && !usedMaskedValues.has(primary)) return primary;
+  const fallback = `<${stableId}_MASKED>`;
+  if (!occupiedValues.has(fallback) && !usedMaskedValues.has(fallback)) return fallback;
+  let index = 1;
+  let candidate = `<${stableId}_MASKED_${index}>`;
+  while (occupiedValues.has(candidate) || usedMaskedValues.has(candidate)) {
+    index += 1;
+    candidate = `<${stableId}_MASKED_${index}>`;
+  }
+  return candidate;
+}
+
+function defaultMaskedValue(originalValue: string, stableId: string, existingEntities: EntityItem[] = []) {
+  const occupiedValues = new Set([
+    originalValue,
+    ...existingEntities.map((entity) => entity.originalValue.trim()).filter(Boolean)
+  ]);
+  const usedMaskedValues = new Set(
+    existingEntities.map((entity) => entity.maskedValue.trim()).filter(Boolean)
+  );
+  const suffix = organizationMaskSuffix(originalValue);
+  if (suffix) {
+    const startIndex = stableIdNumber(stableId);
+    for (let offset = 0; offset < 1000; offset += 1) {
+      const candidate = `${alphabeticLabel(startIndex + offset)}${suffix}`;
+      if (candidate !== originalValue && !occupiedValues.has(candidate) && !usedMaskedValues.has(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues);
 }
 
 function uniqueClientId(prefix: string) {
