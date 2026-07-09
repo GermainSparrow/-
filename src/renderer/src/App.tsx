@@ -21,6 +21,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { defaultMaskedValue as createDefaultMaskedValue } from "../../shared/person-masking";
 import type {
   ApiResponse,
   Credential,
@@ -39,7 +40,8 @@ import type {
   SanitizeMode,
   SanitizeSource,
   SanitizeResultItem,
-  EntitySetExportResult
+  EntitySetExportResult,
+  TextOutputMode
 } from "./types";
 
 type StatusTone = "info" | "success" | "warning" | "error";
@@ -63,6 +65,7 @@ interface SanitizeState {
   password: string;
   keyFile: DocumentSummary | null;
   outputDir: string;
+  textOutputMode: TextOutputMode;
   preview: PreviewResult | null;
   entities: EntityItem[];
   results: SanitizeResultItem[];
@@ -96,6 +99,7 @@ const INITIAL_SANITIZE_STATE: SanitizeState = {
   password: "",
   keyFile: null,
   outputDir: "",
+  textOutputMode: "file",
   preview: null,
   entities: [],
   results: [],
@@ -156,14 +160,12 @@ export default function App() {
       : sanitize.pastedText.trim().length > 0;
     if (sanitize.results.length) return 4;
     if (sanitize.entities.length || sanitize.preview) return 3;
-    if (hasInput || sanitize.outputDir || sanitize.mode) return 2;
+    if (hasInput) return 2;
     return 1;
   }, [
     sanitize.entities.length,
     sanitize.files.length,
     sanitize.inputKind,
-    sanitize.mode,
-    sanitize.outputDir,
     sanitize.pastedText,
     sanitize.preview,
     sanitize.results.length
@@ -506,7 +508,11 @@ export default function App() {
       setStatus({ tone: "error", title: "请先输入待脱敏内容" });
       return;
     }
-    if (!sanitize.outputDir) {
+    const textOutputMode = sanitize.textOutputMode || "file";
+    const outputDirectoryRequired = source.kind === "word" ||
+      sanitize.mode === "reversible" ||
+      textOutputMode === "file";
+    if (outputDirectoryRequired && !sanitize.outputDir) {
       setStatus({ tone: "error", title: "请选择输出目录" });
       return;
     }
@@ -550,7 +556,8 @@ export default function App() {
           source,
           mode: sanitize.mode,
           entities: enabledEntities,
-          outputDir: sanitize.outputDir,
+          ...(outputDirectoryRequired ? { outputDir: sanitize.outputDir } : {}),
+          textOutputMode,
           credential,
           acknowledgements: {
             imageContentUnmodified: sanitize.imageContentAcknowledged
@@ -563,10 +570,15 @@ export default function App() {
         running: false,
         results: result.results
       }));
+      const outputFileCount = result.results.reduce((count, item) =>
+        count + (item.outputs.sanitizedFile ? 1 : 0) + (item.outputs.mappingFile ? 1 : 0),
+      0);
       setStatus({
         tone: "success",
-        title: "脱敏导出完成",
-        body: `已生成 ${result.results.length} 组输出文件。`
+        title: outputFileCount ? "脱敏导出完成" : "脱敏文本已生成",
+        body: outputFileCount
+          ? `已生成 ${outputFileCount} 个输出文件。`
+          : "已在结果区生成可复制的脱敏文本。"
       });
     } catch (error) {
       setSanitize((current) => ({ ...current, running: false }));
@@ -792,6 +804,9 @@ export default function App() {
               onSelectKeyFile={selectSanitizeKeyFile}
               onRun={runSanitize}
               onModeChange={(mode) => setSanitize((current) => ({ ...current, mode }))}
+              onTextOutputModeChange={(textOutputMode) =>
+                setSanitize((current) => ({ ...current, textOutputMode }))
+              }
               onCredentialMethodChange={(credentialMethod) =>
                 setSanitize((current) => ({ ...current, credentialMethod }))
               }
@@ -982,7 +997,7 @@ function Dashboard({
           {sanitizeResults.length || restoreResult ? (
             <div className="space-y-3">
               {sanitizeResults.map((result) => (
-                <OutputGroup key={`${result.docId}-${result.outputs.sanitizedFile}`} result={result} />
+                <OutputGroup key={sanitizeResultKey(result)} result={result} />
               ))}
               {restoreResult && (
                 <PathList
@@ -1076,6 +1091,7 @@ function SanitizeWorkflow({
   onSelectKeyFile,
   onRun,
   onModeChange,
+  onTextOutputModeChange,
   onCredentialMethodChange,
   onPasswordChange,
   onAddManualEntity,
@@ -1098,6 +1114,7 @@ function SanitizeWorkflow({
   onSelectKeyFile: () => void;
   onRun: () => void;
   onModeChange: (mode: SanitizeMode) => void;
+  onTextOutputModeChange: (mode: TextOutputMode) => void;
   onCredentialMethodChange: (method: CredentialMethod) => void;
   onPasswordChange: (password: string) => void;
   onAddManualEntity: () => void;
@@ -1112,18 +1129,25 @@ function SanitizeWorkflow({
     (state.inputKind === "word" && state.files[0]?.docId)
   );
   const imageAckRequired = requiresImageAcknowledgement(state.preview);
+  const isTextInput = state.inputKind === "text";
+  const textOutputMode = state.textOutputMode || "file";
+  const outputDirectoryRequired = state.inputKind === "word" ||
+    state.mode === "reversible" ||
+    textOutputMode === "file";
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="文档脱敏"
-        description="导入、识别、复核并导出脱敏文件"
-        aside={<BackButton onClick={onBack} />}
-      />
-      <Stepper
-        current={step}
-        steps={["输入内容", "选择模式", "确认实体", "导出结果"]}
-      />
+      <StickyPageTop>
+        <PageHeader
+          title="文档脱敏"
+          description="导入、识别、复核并导出脱敏文件"
+          aside={<BackButton onClick={onBack} />}
+        />
+        <Stepper
+          current={step}
+          steps={["输入内容", "确认脱敏内容", "选择模式", "导出结果"]}
+        />
+      </StickyPageTop>
 
       <section className="grid grid-cols-12 gap-5">
         <div className="col-span-12 space-y-5 xl:col-span-8">
@@ -1142,7 +1166,7 @@ function SanitizeWorkflow({
           </Panel>
 
           <Panel
-            title="实体确认"
+            title="确认脱敏内容"
             icon={FileCheck2}
             right={
               <Button icon={RefreshCw} variant="secondary" onClick={onPreview} disabled={state.previewing || !hasInput}>
@@ -1169,6 +1193,13 @@ function SanitizeWorkflow({
             <div className="space-y-4">
               <ModeSelector mode={state.mode} onChange={onModeChange} />
 
+              {isTextInput && state.mode === "irreversible" ? (
+                <TextOutputModeSelector
+                  value={textOutputMode}
+                  onChange={onTextOutputModeChange}
+                />
+              ) : null}
+
               {state.mode === "reversible" && (
                 <CredentialFields
                   method={state.credentialMethod}
@@ -1180,7 +1211,15 @@ function SanitizeWorkflow({
                 />
               )}
 
-              <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
+              {isTextInput && state.mode === "reversible" ? (
+                <div className="rounded-lg border border-primary/20 bg-primary-muted px-3 py-3 text-xs leading-5 text-primary">
+                  可恢复文本会导出加密映射文件，并在结果区生成可复制的脱敏文本。
+                </div>
+              ) : null}
+
+              {outputDirectoryRequired ? (
+                <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
+              ) : null}
 
               {imageAckRequired ? (
                 <ImageAcknowledgement
@@ -1200,6 +1239,18 @@ function SanitizeWorkflow({
                     {state.mode === "reversible" ? "可恢复" : "不可恢复"}
                   </span>
                 </div>
+                {isTextInput ? (
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-on-surface-muted">文本输出</span>
+                    <span className="font-semibold text-on-surface">
+                      {state.mode === "reversible"
+                        ? "映射文件 + 可复制文本"
+                        : textOutputMode === "file"
+                          ? "导出文件"
+                          : "可复制文本"}
+                    </span>
+                  </div>
+                ) : null}
               </div>
 
               <Button icon={FileCheck2} block onClick={onRun} disabled={state.running || (imageAckRequired && !state.imageContentAcknowledged)}>
@@ -1212,7 +1263,7 @@ function SanitizeWorkflow({
             {state.results.length ? (
               <div className="space-y-4">
                 {state.results.map((result) => (
-                  <OutputGroup key={`${result.docId}-${result.outputs.sanitizedFile}`} result={result} />
+                  <OutputGroup key={sanitizeResultKey(result)} result={result} />
                 ))}
               </div>
             ) : (
@@ -1364,6 +1415,14 @@ function PageHeader({
       </div>
       {aside}
     </header>
+  );
+}
+
+function StickyPageTop({ children }: { children: ReactNode }) {
+  return (
+    <div className="sticky top-0 z-30 -mx-8 -mt-7 bg-background px-8 pt-7">
+      <div className="space-y-6">{children}</div>
+    </div>
   );
 }
 
@@ -2171,6 +2230,28 @@ function EntityTable({
   );
 }
 
+function TextOutputModeSelector({
+  value,
+  onChange
+}: {
+  value: TextOutputMode;
+  onChange: (mode: TextOutputMode) => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-lg border border-border bg-surface-muted p-3">
+      <p className="text-xs font-semibold text-on-surface-muted">文本输出方式</p>
+      <SegmentedControl
+        value={value}
+        options={[
+          { value: "file", label: "导出文件" },
+          { value: "copy", label: "仅生成文本" }
+        ]}
+        onChange={(nextValue) => onChange(nextValue as TextOutputMode)}
+      />
+    </div>
+  );
+}
+
 function ModeSelector({ mode, onChange }: { mode: SanitizeMode; onChange: (mode: SanitizeMode) => void }) {
   return (
     <div className="grid grid-cols-1 gap-3">
@@ -2378,7 +2459,7 @@ function OutputGroup({ result }: { result: SanitizeResultItem }) {
       </div>
       <PathList
         rows={[
-          ["脱敏文件", result.outputs.sanitizedFile],
+          result.outputs.sanitizedFile ? ["脱敏文件", result.outputs.sanitizedFile] : null,
           result.outputs.mappingFile ? ["映射文件", result.outputs.mappingFile] : null
         ].filter((row): row is [string, string] => Boolean(row))}
       />
@@ -2508,47 +2589,7 @@ function nextStableId(docId: string, entities: EntityItem[], ignoreIndex = -1) {
   return `${GENERIC_ENTITY_PREFIX}_${String(count).padStart(3, "0")}`;
 }
 
-function alphabeticLabel(index: number) {
-  let value = Math.max(1, Number(index) || 1);
-  let result = "";
-  while (value > 0) {
-    value -= 1;
-    result = String.fromCharCode(65 + (value % 26)) + result;
-    value = Math.floor(value / 26);
-  }
-  return result;
-}
-
-function stableIdNumber(stableId: string) {
-  const match = /_(\d+)$/.exec(stableId);
-  return match ? Number(match[1]) : 1;
-}
-
-function organizationMaskSuffix(originalValue: string) {
-  const value = originalValue.trim();
-  if (!/[\u4e00-\u9fff]/.test(value)) return "";
-  if (/(?:\u516c\u53f8|\u6709\u9650\u516c\u53f8|\u6709\u9650\u8d23\u4efb\u516c\u53f8|\u80a1\u4efd\u6709\u9650\u516c\u53f8|\u5206\u516c\u53f8|\u5b50\u516c\u53f8)$/.test(value)) {
-    return "\u516c\u53f8";
-  }
-  if (/\u96c6\u56e2$/.test(value)) return "\u96c6\u56e2";
-  if (/\u9879\u76ee\u90e8$/.test(value)) return "\u9879\u76ee\u90e8";
-  if (/\u4e2d\u5fc3$/.test(value)) return "\u4e2d\u5fc3";
-  if (/\u7814\u7a76\u9662$/.test(value)) return "\u7814\u7a76\u9662";
-  if (/\u8bbe\u8ba1\u9662$/.test(value)) return "\u8bbe\u8ba1\u9662";
-  if (/\u5b66\u9662$/.test(value)) return "\u5b66\u9662";
-  if (/\u533b\u9662$/.test(value)) return "\u533b\u9662";
-  if (/\u5c40$/.test(value)) return "\u5c40";
-  if (/(?:\u8def\u6865|\u8def\u822a|\u8700\u9053|\u5efa\u8bbe|\u5de5\u7a0b|\u6295\u8d44|\u4ea4\u901a|\u9ad8\u901f|\u94c1\u8def|\u7269\u6d41|\u8fd0\u8425|\u7ba1\u7406)/.test(value)) {
-    return "\u516c\u53f8";
-  }
-  return "";
-}
-
-function placeholderMaskedValue(stableId: string, occupiedValues: Set<string>, usedMaskedValues: Set<string>) {
-  const primary = `<${stableId}>`;
-  if (!occupiedValues.has(primary) && !usedMaskedValues.has(primary)) return primary;
-  const fallback = `<${stableId}_MASKED>`;
-  if (!occupiedValues.has(fallback) && !usedMaskedValues.has(fallback)) return fallback;
+function incrementalPlaceholderFallback(stableId: string, occupiedValues: Set<string>, usedMaskedValues: Set<string>) {
   let index = 1;
   let candidate = `<${stableId}_MASKED_${index}>`;
   while (occupiedValues.has(candidate) || usedMaskedValues.has(candidate)) {
@@ -2566,17 +2607,11 @@ function defaultMaskedValue(originalValue: string, stableId: string, existingEnt
   const usedMaskedValues = new Set(
     existingEntities.map((entity) => entity.maskedValue.trim()).filter(Boolean)
   );
-  const suffix = organizationMaskSuffix(originalValue);
-  if (suffix) {
-    const startIndex = stableIdNumber(stableId);
-    for (let offset = 0; offset < 1000; offset += 1) {
-      const candidate = `${alphabeticLabel(startIndex + offset)}${suffix}`;
-      if (candidate !== originalValue && !occupiedValues.has(candidate) && !usedMaskedValues.has(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues);
+  return createDefaultMaskedValue(originalValue, stableId, {
+    occupiedValues,
+    usedMaskedValues,
+    createPlaceholderFallback: incrementalPlaceholderFallback
+  });
 }
 
 function uniqueClientId(prefix: string) {
@@ -2675,6 +2710,10 @@ function formatBytes(size: number) {
 
 function fileNameFromPath(filePath: string) {
   return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function sanitizeResultKey(result: SanitizeResultItem) {
+  return `${result.docId}-${result.outputs.sanitizedFile || result.outputs.mappingFile || result.sourceLabel}`;
 }
 
 function requiresImageAcknowledgement(preview: PreviewResult | null) {

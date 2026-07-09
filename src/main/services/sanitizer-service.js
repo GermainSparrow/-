@@ -164,11 +164,19 @@ async function previewSanitization(source) {
   };
 }
 
-async function sanitizeTextSource({ text, outputDir, entities, outputStem }) {
+async function sanitizeTextSource({ text, outputDir, entities, outputStem, writeFile = true }) {
   const sanitizedText = applySanitization(text, entities);
   const leaks = findOriginalLeaks(sanitizedText, entities);
   if (leaks.length) {
     throw new AppError("SANITIZE_LEAK_DETECTED", "文本脱敏后仍检测到原始敏感信息", leaks);
+  }
+
+  if (!writeFile) {
+    return {
+      outputPath: null,
+      warnings: [],
+      sanitizedText
+    };
   }
 
   const outputPath = await createUniqueOutputPath(
@@ -186,7 +194,7 @@ async function sanitizeTextSource({ text, outputDir, entities, outputStem }) {
   };
 }
 
-async function sanitizeSource({ source, outputDir, entities, outputStem, acknowledgements = {} }) {
+async function sanitizeSource({ source, outputDir, entities, outputStem, acknowledgements = {}, writeTextFile = true }) {
   if (source.kind === "word") {
     return sanitizeDocument({
       filePath: source.path,
@@ -201,11 +209,12 @@ async function sanitizeSource({ source, outputDir, entities, outputStem, acknowl
     text: source.text,
     outputDir,
     entities,
-    outputStem
+    outputStem,
+    writeFile: writeTextFile
   });
 }
 
-async function runSanitization({ source, mode, entities, outputDir, credential, acknowledgements = {} }) {
+async function runSanitization({ source, mode, entities, outputDir, credential, acknowledgements = {}, textOutputMode = "file" }) {
   const writtenPaths = [];
 
   try {
@@ -242,18 +251,22 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
       })
       : null;
     const outputStem = outputStemForSource(summary);
+    const writeTextFile = source.kind !== "text" || (mode === "irreversible" && textOutputMode === "file");
 
     const sanitizeResult = await sanitizeSource({
       source,
       outputDir,
       entities: docEntities,
       outputStem,
-      acknowledgements
+      acknowledgements,
+      writeTextFile
     });
-    writtenPaths.push(sanitizeResult.outputPath);
+    if (sanitizeResult.outputPath) {
+      writtenPaths.push(sanitizeResult.outputPath);
+    }
 
     const outputs = {
-      sanitizedFile: sanitizeResult.outputPath,
+      sanitizedFile: sanitizeResult.outputPath || null,
       mappingFile: null,
       reportFile: null
     };

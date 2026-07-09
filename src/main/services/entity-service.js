@@ -1,4 +1,10 @@
 const crypto = require("node:crypto");
+const {
+  COMMON_CHINESE_SURNAMES,
+  COMMON_COMPOUND_SURNAMES,
+  defaultMaskedValue,
+  isLikelyPersonName
+} = require("../../shared/person-masking");
 
 const GENERIC_ENTITY_TYPE = "entity";
 
@@ -24,7 +30,85 @@ const TYPE_LABEL = {
   account: "账号"
 };
 
+const PERSON_LABELS = [
+  "项目负责人",
+  "法定代表人",
+  "委托代理人",
+  "负责人",
+  "联系人",
+  "经办人",
+  "承办人",
+  "办理人",
+  "审核人",
+  "复核人",
+  "审批人",
+  "批准人",
+  "编制人",
+  "校核人",
+  "项目经理",
+  "代理人",
+  "申请人",
+  "被申请人",
+  "签字人",
+  "签收人",
+  "收件人",
+  "发件人",
+  "姓名",
+  "作者"
+].sort((left, right) => right.length - left.length);
+
+const CHINESE_PERSON_NAME_PATTERN = `(?:${COMMON_COMPOUND_SURNAMES.join("|")}|[${COMMON_CHINESE_SURNAMES}])[\\u4e00-\\u9fff·]{1,3}`;
+const PERSON_TITLE_LABELS = [
+  "党委副书记",
+  "党委书记",
+  "党委委员",
+  "纪委书记",
+  "法定代表人",
+  "执行董事",
+  "副董事长",
+  "董事长",
+  "副总经理",
+  "总经理",
+  "总工程师",
+  "副总工程师",
+  "总会计师",
+  "总经济师",
+  "安全总监",
+  "技术负责人",
+  "项目经理",
+  "工会主席",
+  "董事",
+  "监事",
+  "书记",
+  "经理",
+  "主任",
+  "副主任",
+  "部长",
+  "副部长",
+  "处长",
+  "副处长"
+].sort((left, right) => right.length - left.length);
+const PERSON_LABEL_PATTERN = new RegExp(
+  `(?:${PERSON_LABELS.join("|")})[\\s\\u00a0]*(?:[:：=,，、\\-—]|为|是|\\s){0,6}(${CHINESE_PERSON_NAME_PATTERN})(?=$|[\\s,，;；。.、:：)）(（]|电话|手机|联系方式|职务|岗位|身份证|邮箱|账号)`,
+  "g"
+);
+const PERSON_TITLE_PATTERN = new RegExp(
+  `(?:${PERSON_TITLE_LABELS.join("|")})(?:[\\s\\u00a0]*(?:、|,|，|/|兼|及|和)?[\\s\\u00a0]*(?:${PERSON_TITLE_LABELS.join("|")})){0,5}[\\s\\u00a0]*(${CHINESE_PERSON_NAME_PATTERN})(?=$|[\\s,，;；。.、:：)）(（]|等|出席|主持|指出|致|作|参加|参会|发言|讲话|汇报|介绍|表示|强调|要求|认为)`,
+  "g"
+);
 const DETECTORS = [
+  {
+    type: "person",
+    pattern: PERSON_LABEL_PATTERN,
+    valueGroup: 1,
+    validate: isLikelyPersonName
+  },
+  {
+    type: "person",
+    pattern: PERSON_TITLE_PATTERN,
+    valueGroup: 1,
+    validate: isLikelyPersonName
+  },
   {
     type: "idCard",
     pattern: /(?<![0-9Xx])\d{6}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[0-9Xx](?![0-9Xx])/g
@@ -56,62 +140,8 @@ function makeStableId(type, index) {
   return `${prefix}_${String(index).padStart(3, "0")}`;
 }
 
-function alphabeticLabel(index) {
-  let value = Math.max(1, Number(index) || 1);
-  let result = "";
-  while (value > 0) {
-    value -= 1;
-    result = String.fromCharCode(65 + (value % 26)) + result;
-    value = Math.floor(value / 26);
-  }
-  return result;
-}
-
-function stableIdNumber(stableId) {
-  const match = /_(\d+)$/.exec(String(stableId || ""));
-  return match ? Number(match[1]) : 1;
-}
-
-function organizationMaskSuffix(originalValue) {
-  const value = String(originalValue || "").trim();
-  if (!/[\u4e00-\u9fff]/.test(value)) return "";
-  if (/(?:\u516c\u53f8|\u6709\u9650\u516c\u53f8|\u6709\u9650\u8d23\u4efb\u516c\u53f8|\u80a1\u4efd\u6709\u9650\u516c\u53f8|\u5206\u516c\u53f8|\u5b50\u516c\u53f8)$/.test(value)) {
-    return "\u516c\u53f8";
-  }
-  if (/\u96c6\u56e2$/.test(value)) return "\u96c6\u56e2";
-  if (/\u9879\u76ee\u90e8$/.test(value)) return "\u9879\u76ee\u90e8";
-  if (/\u4e2d\u5fc3$/.test(value)) return "\u4e2d\u5fc3";
-  if (/\u7814\u7a76\u9662$/.test(value)) return "\u7814\u7a76\u9662";
-  if (/\u8bbe\u8ba1\u9662$/.test(value)) return "\u8bbe\u8ba1\u9662";
-  if (/\u5b66\u9662$/.test(value)) return "\u5b66\u9662";
-  if (/\u533b\u9662$/.test(value)) return "\u533b\u9662";
-  if (/\u5c40$/.test(value)) return "\u5c40";
-  if (/(?:\u8def\u6865|\u8def\u822a|\u8700\u9053|\u5efa\u8bbe|\u5de5\u7a0b|\u6295\u8d44|\u4ea4\u901a|\u9ad8\u901f|\u94c1\u8def|\u7269\u6d41|\u8fd0\u8425|\u7ba1\u7406)/.test(value)) {
-    return "\u516c\u53f8";
-  }
-  return "";
-}
-
-function placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues) {
-  const primary = `<${stableId}>`;
-  if (!occupiedValues.has(primary) && !usedMaskedValues.has(primary)) return primary;
-  const fallback = `<${stableId}_MASKED>`;
-  if (!occupiedValues.has(fallback) && !usedMaskedValues.has(fallback)) return fallback;
+function deterministicPlaceholderFallback(stableId) {
   return `<${stableId}_${sha256(`${stableId}:masked`).slice(0, 6)}>`;
-}
-
-function defaultMaskedValue(originalValue, stableId, occupiedValues = new Set(), usedMaskedValues = new Set()) {
-  const suffix = organizationMaskSuffix(originalValue);
-  if (suffix) {
-    const startIndex = stableIdNumber(stableId);
-    for (let offset = 0; offset < 1000; offset += 1) {
-      const candidate = `${alphabeticLabel(startIndex + offset)}${suffix}`;
-      if (candidate !== originalValue && !occupiedValues.has(candidate) && !usedMaskedValues.has(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues);
 }
 
 function contextHash(text, index, length) {
@@ -151,7 +181,14 @@ function detectRuleEntities(documents, byDocAndValue) {
         detector.pattern.lastIndex = 0;
         let match;
         while ((match = detector.pattern.exec(segment.text)) !== null) {
-          addEntitySeed(byDocAndValue, document, segment, match[0], match.index, "auto");
+          const originalValue = detector.valueGroup ? match[detector.valueGroup] : match[0];
+          if (!originalValue) continue;
+          if (detector.validate && !detector.validate(originalValue, match, segment.text)) continue;
+
+          const index = detector.valueGroup
+            ? match.index + match[0].indexOf(originalValue)
+            : match.index;
+          addEntitySeed(byDocAndValue, document, segment, originalValue, index, "auto");
         }
       }
     }
@@ -237,12 +274,11 @@ function detectEntities(documents, entitySets = []) {
     const nextIndex = (counters.get(counterKey) || 0) + 1;
     counters.set(counterKey, nextIndex);
     const stableId = makeStableId(GENERIC_ENTITY_TYPE, nextIndex);
-    const maskedValue = entity.maskedValue || defaultMaskedValue(
-      entity.originalValue,
-      stableId,
+    const maskedValue = entity.maskedValue || defaultMaskedValue(entity.originalValue, stableId, {
       occupiedValues,
-      usedMaskedValues
-    );
+      usedMaskedValues,
+      createPlaceholderFallback: deterministicPlaceholderFallback
+    });
     usedMaskedValues.add(maskedValue);
 
     return {
@@ -267,7 +303,10 @@ function detectStructuredValues(text) {
     detector.pattern.lastIndex = 0;
     let match;
     while ((match = detector.pattern.exec(text)) !== null) {
-      const originalValue = match[0];
+      const originalValue = detector.valueGroup ? match[detector.valueGroup] : match[0];
+      if (!originalValue) continue;
+      if (detector.validate && !detector.validate(originalValue, match, text)) continue;
+
       const key = `${detector.type}:${originalValue}`;
       if (!byTypeAndValue.has(key)) {
         byTypeAndValue.set(key, {

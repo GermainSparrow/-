@@ -1,6 +1,11 @@
 const { z } = require("zod");
 const { AppError } = require("./app-error");
 
+const optionalNonEmptyString = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().min(1).optional()
+);
+
 const entitySchema = z.object({
   id: z.string().min(1),
   docId: z.string().min(1),
@@ -90,7 +95,8 @@ const sanitizeRunSchema = z.object({
   source: sourceSchema,
   mode: z.enum(["irreversible", "reversible"]),
   entities: z.array(entitySchema),
-  outputDir: z.string().min(1),
+  outputDir: optionalNonEmptyString,
+  textOutputMode: z.enum(["file", "copy"]).optional().default("file"),
   credential: credentialSchema.optional(),
   acknowledgements: acknowledgementSchema
 }).superRefine((value, context) => {
@@ -99,6 +105,16 @@ const sanitizeRunSchema = z.object({
       code: "custom",
       path: ["credential"],
       message: "可恢复脱敏必须提供口令或密钥文件"
+    });
+  }
+  const outputDirectoryRequired = value.source.kind === "word" ||
+    value.mode === "reversible" ||
+    value.textOutputMode === "file";
+  if (outputDirectoryRequired && !value.outputDir) {
+    context.addIssue({
+      code: "custom",
+      path: ["outputDir"],
+      message: "请选择输出目录"
     });
   }
 });

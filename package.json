@@ -4,10 +4,10 @@
   "description": "Electron initial version for document sanitization and restoration workflows.",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "npm run build:renderer && electron .",
-    "dev": "npm run dev:electron",
+    "start": "node scripts/dev.js --build",
+    "dev": "node scripts/dev.js",
     "dev:renderer": "vite --config vite.renderer.config.ts --host 127.0.0.1 --port 5173",
-    "dev:electron": "cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .",
+    "dev:electron": "node scripts/dev.js --electron-only",
     "build:renderer": "vite build --config vite.renderer.config.ts",
     "lint": "tsc --noEmit",
     "test": "node --test"

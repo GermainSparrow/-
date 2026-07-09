@@ -66,7 +66,17 @@ function assertSanitizePayloadAuthorized(payload) {
   if (payload.source.kind === "word") {
     assertAuthorizedFilePath(payload.source.path, "sanitize");
   }
-  assertAuthorizedOutputDirectory(payload.outputDir);
+  const outputDirectoryRequired = payload.source.kind === "word" ||
+    payload.mode === "reversible" ||
+    (payload.textOutputMode || "file") === "file";
+  if (outputDirectoryRequired) {
+    if (!payload.outputDir) {
+      throw new AppError("UNAUTHORIZED_OUTPUT_DIRECTORY", "输出目录未通过目录选择器授权", {
+        path: payload.outputDir
+      });
+    }
+    assertAuthorizedOutputDirectory(payload.outputDir);
+  }
   assertCredentialAuthorized(payload.credential);
 }
 

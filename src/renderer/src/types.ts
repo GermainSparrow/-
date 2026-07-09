@@ -2,6 +2,8 @@ export type NavigationView = "dashboard" | "sanitize" | "restore" | "entitySets"
 
 export type SanitizeMode = "irreversible" | "reversible";
 
+export type TextOutputMode = "file" | "copy";
+
 export type CredentialMethod = "password" | "keyFile";
 
 export type InputSourceKind = "word" | "text";
@@ -106,7 +108,7 @@ export interface EntitySummary {
 }
 
 export interface SanitizeOutputPaths {
-  sanitizedFile: string;
+  sanitizedFile: string | null;
   mappingFile: string | null;
   reportFile: string | null;
 }
@@ -169,7 +171,8 @@ export interface DesktopApi {
     source: SanitizeSource;
     mode: SanitizeMode;
     entities: EntityItem[];
-    outputDir: string;
+    outputDir?: string;
+    textOutputMode?: TextOutputMode;
     credential?: Credential;
     acknowledgements?: {
       imageContentUnmodified?: boolean;

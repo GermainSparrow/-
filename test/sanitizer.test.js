@@ -11,7 +11,8 @@ const { PDFDocument, StandardFonts } = require("pdf-lib");
 const {
   applyRestoration,
   applySanitization,
-  detectEntities
+  detectEntities,
+  detectStructuredValues
 } = require("../src/main/services/entity-service");
 const {
   clearEntitySetStoreForTest,
@@ -69,6 +70,7 @@ const {
 const {
   droppedDocumentImportSchema,
   entitySetSaveSchema,
+  sanitizeRunSchema,
   parseWithSchema
 } = require("../src/main/services/schemas");
 
@@ -142,6 +144,62 @@ test("detects structured entities and replaces longer strings first", () => {
     manualEntity({ originalValue: "李明", maskedValue: "<PERSON_001>", stableId: "PERSON_001" })
   ]);
   assert.equal(result, "<PERSON_001>和<CHAR_001>");
+});
+
+test("detects person names from common name fields", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "\u9879\u76ee\u8d1f\u8d23\u4eba\u674e\u660e\uff0c\u8054\u7cfb\u4eba\uff1a\u5f20\u4e09\uff1b\u7535\u8bdd13800138000\u3002"
+    }]
+  }];
+
+  const detected = detectEntities(documents);
+  const originals = detected.map((entity) => entity.originalValue);
+  assert.deepEqual(originals, ["\u674e\u660e", "\u5f20\u4e09", "13800138000"]);
+  assert.ok(detected.every((entity) => entity.type === "entity"));
+  assert.deepEqual(detected.map((entity) => entity.maskedValue), ["\u674e\u56db", "\u738b\u4e94", "<ENTITY_003>"]);
+
+  const organizationFieldDocuments = [{
+    docId: "doc2",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc2:text",
+      text: "\u8d1f\u8d23\u4eba\u5355\u4f4d\uff1a\u56db\u5ddd\u8def\u6865\u516c\u53f8\uff0c\u8054\u7cfb\u4eba\uff1a\u674e\u660e\uff0c\u7535\u8bdd13800138000\u3002"
+    }]
+  }];
+  assert.deepEqual(
+    detectEntities(organizationFieldDocuments).map((entity) => entity.originalValue),
+    ["\u674e\u660e", "13800138000"]
+  );
+
+  const titleContextDocuments = [{
+    docId: "doc3",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc3:text",
+      text: "\u516c\u53f8\u515a\u59d4\u4e66\u8bb0\u3001\u8463\u4e8b\u957f\u674e\u7389\u53cb\uff0c\u515a\u59d4\u526f\u4e66\u8bb0\u3001\u8463\u4e8b\u3001\u603b\u7ecf\u7406\u90b9\u589e\u5bcc\u7b49\u9886\u5bfc\u51fa\u5e2d\uff0c\u516c\u53f8\u515a\u59d4\u59d4\u5458\u3001\u603b\u5de5\u7a0b\u5e08\u5f20\u5251\u5b81\u4e3b\u6301\u3002\u516c\u53f8\u515a\u59d4\u526f\u4e66\u8bb0\u3001\u8463\u4e8b\u3001\u603b\u7ecf\u7406\u90b9\u589e\u5bcc\u81f4\u5f00\u5e55\u8bcd\u3002"
+    }]
+  }];
+  const titleContextDetected = detectEntities(titleContextDocuments);
+  const titleContextByValue = new Map(titleContextDetected.map((entity) => [entity.originalValue, entity]));
+  assert.deepEqual(titleContextDetected.map((entity) => entity.originalValue), [
+    "\u674e\u7389\u53cb",
+    "\u90b9\u589e\u5bcc",
+    "\u5f20\u5251\u5b81"
+  ]);
+  assert.deepEqual(titleContextDetected.map((entity) => entity.maskedValue), [
+    "\u5f20\u4e09",
+    "\u674e\u56db",
+    "\u738b\u4e94"
+  ]);
+  assert.equal(titleContextByValue.get("\u90b9\u589e\u5bcc").locations.length, 2);
+  assert.deepEqual(detectStructuredValues("\u8d1f\u8d23\u4eba\u5f20\u4e09"), [{
+    type: "person",
+    originalValue: "\u5f20\u4e09"
+  }]);
 });
 
 test("detects custom entity set entries with longest match and deduplication", () => {
@@ -256,23 +314,23 @@ test("avoids organization-style masked value collisions with original values", (
   assert.ok(maskedValues.every((maskedValue) => !originals.has(maskedValue)));
 });
 
-test("keeps non-organization custom entity defaults as stable placeholders", () => {
+test("keeps non-person custom entity defaults as stable placeholders", () => {
   const documents = [{
     docId: "doc1",
     path: "fixture.txt",
     textSegments: [{
       id: "doc1:text",
-      text: "\u5f20\u4e09\u9700\u8981\u8131\u654f\u3002"
+      text: "\u5408\u540c\u6761\u6b3e\u9700\u8981\u8131\u654f\u3002"
     }]
   }];
   const detected = detectEntities(documents, [{
     id: "set1",
-    name: "\u4eba\u540d\u8bcd\u5e93",
+    name: "\u4e1a\u52a1\u8bcd\u5e93",
     enabled: true,
     items: [{
       id: "item1",
       type: "entity",
-      canonicalName: "\u5f20\u4e09",
+      canonicalName: "\u5408\u540c\u6761\u6b3e",
       aliases: [],
       enabled: true
     }]
@@ -551,6 +609,27 @@ test("uses safe text output names without writing reports", async () => {
   assert.equal((await fs.readdir(tempDir)).filter((name) => name.includes("report")).length, 0);
 });
 
+test("can generate copyable irreversible sanitized text without output files", async () => {
+  const tempDir = await makeTempDir();
+  const text = "负责人李明，电话13800138000。";
+  const preview = await previewSanitization({ kind: "text", text });
+  const docId = preview.files[0].docId;
+
+  const result = await runSanitization({
+    source: { kind: "text", text, docId },
+    mode: "irreversible",
+    textOutputMode: "copy",
+    entities: preview.entities
+  });
+  const item = result.results[0];
+
+  assert.equal(item.outputs.sanitizedFile, null);
+  assert.equal(item.outputs.mappingFile, null);
+  assert.ok(item.sanitizedText);
+  assert.doesNotMatch(item.sanitizedText, /李明|13800138000/);
+  assert.deepEqual(await fs.readdir(tempDir), []);
+});
+
 test("sanitizes and restores docx through source model", async () => {
   const tempDir = await makeTempDir();
   const inputPath = path.join(tempDir, "fixture.docx");
@@ -584,6 +663,28 @@ test("sanitizes and restores docx through source model", async () => {
   assert.equal(path.basename(restoreResult.outputPath), "fixture_已还原.docx");
   const restored = await extractDocxDocument(restoreResult.outputPath, "verify");
   assert.match(restored.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("does not block docx output when detected person names use fake masked values", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "auto-person.docx");
+  await writeDocxWithText(inputPath, "负责人李明，电话13800138000。");
+
+  const preview = await previewSanitization({ kind: "word", path: inputPath });
+  const docId = preview.files[0].docId;
+  assert.deepEqual(preview.entities.map((entity) => entity.originalValue), ["李明", "13800138000"]);
+
+  const sanitizeResult = await runSanitization({
+    source: { kind: "word", path: inputPath, docId },
+    mode: "irreversible",
+    entities: preview.entities,
+    outputDir: tempDir
+  });
+
+  const sanitized = await extractDocxDocument(sanitizeResult.results[0].outputs.sanitizedFile, "verify");
+  const sanitizedText = sanitized.textSegments.map((segment) => segment.text).join("\n");
+  assert.match(sanitizedText, /张三/);
+  assert.doesNotMatch(sanitizedText, /李明|13800138000/);
 });
 
 test("blocks unsupported file types through source preview", async () => {
@@ -624,6 +725,28 @@ test("validates dropped docx import payloads", () => {
   }), /参数校验失败/);
   assert.doesNotThrow(() => assertSupported("D:/work/fixture.docx"));
   assert.throws(() => assertSupported("D:/work/fixture.pdf"), /仅支持 Word DOCX 文件/);
+});
+
+test("allows blank output directory for copy-only text sanitization", () => {
+  const parsed = parseWithSchema(sanitizeRunSchema, {
+    source: { kind: "text", text: "负责人李明" },
+    mode: "irreversible",
+    entities: [manualEntity()],
+    outputDir: "",
+    textOutputMode: "copy",
+    acknowledgements: {}
+  });
+
+  assert.equal(parsed.outputDir, undefined);
+  assert.equal(parsed.textOutputMode, "copy");
+  assert.throws(() => parseWithSchema(sanitizeRunSchema, {
+    source: { kind: "text", text: "负责人李明" },
+    mode: "irreversible",
+    entities: [manualEntity()],
+    outputDir: "",
+    textOutputMode: "file",
+    acknowledgements: {}
+  }), /参数校验失败/);
 });
 
 test("preview includes built in shudao entity set entries", async () => {
@@ -760,8 +883,9 @@ test("previews sanitizes and restores pasted text", async () => {
   assert.equal(item.sourceKind, "text");
   assert.ok(item.sanitizedText);
   assert.doesNotMatch(item.sanitizedText, /李明|13800138000|liming@example\.com|6222021234567890123/);
-  assert.equal(await fs.readFile(item.outputs.sanitizedFile, "utf8"), item.sanitizedText);
+  assert.equal(item.outputs.sanitizedFile, null);
   assert.ok(item.outputs.mappingFile);
+  assert.equal((await fs.readdir(tempDir)).filter((name) => name.includes(".sanitized")).length, 0);
 
   const restoreResult = await runRestoration({
     source: { kind: "text", text: item.sanitizedText },
@@ -1188,7 +1312,6 @@ test("sanitizes xlsx headers and footers", async () => {
 
   const extracted = await extractXlsxDocument(inputPath, "doc1");
   const entities = detectEntities([extracted]);
-  entities.push(manualEntity({ filePath: inputPath }));
 
   await sanitizeXlsxDocument({ filePath: inputPath, outputPath, entities });
   const sanitizedWorkbook = new ExcelJS.Workbook();
@@ -1196,8 +1319,8 @@ test("sanitizes xlsx headers and footers", async () => {
   const sanitizedSheet = sanitizedWorkbook.worksheets[0];
   assert.doesNotMatch(sanitizedSheet.headerFooter.oddHeader, /李明/);
   assert.doesNotMatch(sanitizedSheet.headerFooter.oddFooter, /13800138000/);
-  assert.match(sanitizedSheet.headerFooter.oddHeader, /PERSON_001/);
-  assert.match(sanitizedSheet.headerFooter.oddFooter, /ENTITY_001/);
+  assert.match(sanitizedSheet.headerFooter.oddHeader, /张三/);
+  assert.match(sanitizedSheet.headerFooter.oddFooter, /ENTITY_002/);
 });
 
 test("blocks xlsx unconfirmed structured values in data validations", async () => {

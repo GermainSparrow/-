@@ -9,9 +9,15 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     outDir: path.resolve(__dirname, "dist/renderer"),
-    emptyOutDir: true
+    emptyOutDir: true,
+    commonjsOptions: {
+      include: [/node_modules/, /src[\\/]shared/]
+    }
   },
   server: {
-    strictPort: true
+    strictPort: true,
+    fs: {
+      allow: [path.resolve(__dirname, "src")]
+    }
   }
 });

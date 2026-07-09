@@ -173,10 +173,10 @@ async function findXmlLeaksInXlsx(filePath, entities) {
   }
 
   const leaks = [];
-  const knownOriginalValues = new Set(
+  const knownStructuredValues = new Set(
     entities
-      .filter((entity) => entity.enabled !== false && entity.originalValue)
-      .map((entity) => entity.originalValue)
+      .filter((entity) => entity.enabled !== false)
+      .flatMap((entity) => [entity.originalValue, entity.maskedValue].filter(Boolean))
   );
   const seenStructuredLeaks = new Set();
 
@@ -193,7 +193,7 @@ async function findXmlLeaksInXlsx(filePath, entities) {
     }
 
     for (const structuredValue of detectStructuredValues(scanText)) {
-      if (knownOriginalValues.has(structuredValue.originalValue)) continue;
+      if (knownStructuredValues.has(structuredValue.originalValue)) continue;
       const leakKey = `${fileName}:${structuredValue.type}:${structuredValue.originalValue}`;
       if (seenStructuredLeaks.has(leakKey)) continue;
       seenStructuredLeaks.add(leakKey);
