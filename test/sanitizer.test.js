@@ -562,7 +562,11 @@ test("cleans reversible output when mapping credential fails", async () => {
   }));
 
   const outputNames = await fs.readdir(tempDir);
-  assert.deepEqual(outputNames.filter((name) => name.includes(".sanitized") || name.includes(".mapping.enc")), []);
+  assert.deepEqual(outputNames.filter((name) => (
+    name.includes(".sanitized") ||
+    name.includes(".mapping.enc") ||
+    name.includes("_加密映射文件")
+  )), []);
 });
 
 test("restoration does not write a report file", async () => {
@@ -651,6 +655,7 @@ test("sanitizes and restores docx through source model", async () => {
   });
   const outputs = sanitizeResult.results[0].outputs;
   assert.equal(path.basename(outputs.sanitizedFile), "fixture_已脱敏.docx");
+  assert.equal(path.basename(outputs.mappingFile), "fixture_加密映射文件.json");
   const sanitized = await extractDocxDocument(outputs.sanitizedFile, "verify");
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 
@@ -885,7 +890,11 @@ test("previews sanitizes and restores pasted text", async () => {
   assert.doesNotMatch(item.sanitizedText, /李明|13800138000|liming@example\.com|6222021234567890123/);
   assert.equal(item.outputs.sanitizedFile, null);
   assert.ok(item.outputs.mappingFile);
-  assert.equal((await fs.readdir(tempDir)).filter((name) => name.includes(".sanitized")).length, 0);
+  assert.match(path.basename(item.outputs.mappingFile), /^\d{8}_\d{6}_加密映射文件(?:-\d+)?\.json$/u);
+  assert.equal((await fs.readdir(tempDir)).filter((name) => (
+    name.includes(".sanitized") ||
+    name.includes(".mapping.enc")
+  )).length, 0);
 
   const restoreResult = await runRestoration({
     source: { kind: "text", text: item.sanitizedText },

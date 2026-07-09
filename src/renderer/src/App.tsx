@@ -1337,6 +1337,25 @@ function RestoreWorkflow({
             </div>
           </Panel>
 
+          <Panel title="凭据与输出" icon={LockKeyhole}>
+            <div className="space-y-4">
+              <CredentialFields
+                method={state.credentialMethod}
+                password={state.password}
+                keyFile={state.keyFile}
+                onMethodChange={onCredentialMethodChange}
+                onPasswordChange={onPasswordChange}
+                onSelectKeyFile={onSelectKeyFile}
+              />
+              <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
+              <Button icon={RotateCcw} block onClick={onRun} disabled={state.running}>
+                {state.running ? "还原中" : "执行还原"}
+              </Button>
+            </div>
+          </Panel>
+        </div>
+
+        <div className="col-span-12 space-y-5 xl:col-span-4">
           <Panel title="还原结果" icon={FileCheck2}>
             {state.result ? (
               <div className="space-y-4">
@@ -1359,25 +1378,6 @@ function RestoreWorkflow({
             ) : (
               <EmptyState icon={RotateCcw} title="等待还原" body="还原文件路径会在任务完成后显示。" />
             )}
-          </Panel>
-        </div>
-
-        <div className="col-span-12 space-y-5 xl:col-span-4">
-          <Panel title="凭据与输出" icon={LockKeyhole}>
-            <div className="space-y-4">
-              <CredentialFields
-                method={state.credentialMethod}
-                password={state.password}
-                keyFile={state.keyFile}
-                onMethodChange={onCredentialMethodChange}
-                onPasswordChange={onPasswordChange}
-                onSelectKeyFile={onSelectKeyFile}
-              />
-              <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
-              <Button icon={RotateCcw} block onClick={onRun} disabled={state.running}>
-                {state.running ? "还原中" : "执行还原"}
-              </Button>
-            </div>
           </Panel>
 
           <Panel title="还原规则" icon={ShieldCheck}>

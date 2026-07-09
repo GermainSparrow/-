@@ -50,6 +50,31 @@ function outputStemForSource(summary) {
     : safeDocumentLabel(summary.docId);
 }
 
+function padDatePart(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalTimestampForFileName(createdAt) {
+  const date = new Date(createdAt);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return [
+    safeDate.getFullYear(),
+    padDatePart(safeDate.getMonth() + 1),
+    padDatePart(safeDate.getDate())
+  ].join("") + "_" + [
+    padDatePart(safeDate.getHours()),
+    padDatePart(safeDate.getMinutes()),
+    padDatePart(safeDate.getSeconds())
+  ].join("");
+}
+
+function mappingOutputStemForSource(summary, createdAt) {
+  const baseName = summary.sourceKind === "word"
+    ? path.parse(summary.name).name
+    : formatLocalTimestampForFileName(createdAt);
+  return `${baseName || safeDocumentLabel(summary.docId)}_加密映射文件`;
+}
+
 function stripGeneratedWordSuffix(stem) {
   return String(stem || "")
     .replace(/_已脱敏(?:-\d+)?$/u, "")
@@ -272,7 +297,13 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
     };
 
     if (mappingPackage) {
-      outputs.mappingFile = await createUniqueOutputPath(summary.name, outputDir, ".mapping.enc", ".json", outputStem);
+      outputs.mappingFile = await createUniqueOutputPath(
+        summary.name,
+        outputDir,
+        "",
+        ".json",
+        mappingOutputStemForSource(summary, mappingPackage.createdAt)
+      );
       writtenPaths.push(outputs.mappingFile);
       await fs.writeFile(outputs.mappingFile, JSON.stringify(mappingPackage, null, 2), "utf8");
     }
