@@ -22,7 +22,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
 import { defaultMaskedValue as createDefaultMaskedValue } from "../../shared/person-masking";
 import type {
   ApiResponse,
@@ -49,7 +49,6 @@ import type {
 } from "./types";
 
 type StatusTone = "info" | "success" | "warning" | "error";
-type DroppedFilesHandler = (files: File[]) => void | Promise<void>;
 
 const IMAGE_WARNING_MARKER = "图片内内容无法修改";
 
@@ -371,11 +370,6 @@ export default function App() {
     await importSanitizeFiles((api) => api.importDocuments({ purpose: "sanitize", multi: false }));
   }
 
-  async function dropSanitizeFiles(files: File[]) {
-    if (!validateDroppedDocxFiles(files)) return;
-    await importSanitizeFiles((api) => api.importDroppedDocuments({ purpose: "sanitize", files }));
-  }
-
   async function importSanitizeFiles(loader: (api: DesktopApi) => Promise<ApiResponse<DocumentSummary[]>>) {
     try {
       const files = await callDesktop(loader);
@@ -667,11 +661,6 @@ export default function App() {
     await importRestoreFile((api) => api.importDocuments({ purpose: "restore", multi: false }));
   }
 
-  async function dropRestoreFile(files: File[]) {
-    if (!validateDroppedDocxFiles(files)) return;
-    await importRestoreFile((api) => api.importDroppedDocuments({ purpose: "restore", files }));
-  }
-
   async function importRestoreFile(loader: (api: DesktopApi) => Promise<ApiResponse<DocumentSummary[]>>) {
     try {
       const files = await callDesktop(loader);
@@ -687,21 +676,6 @@ export default function App() {
     } catch (error) {
       setStatus(errorStatus(error));
     }
-  }
-
-  function validateDroppedDocxFiles(files: File[]) {
-    if (files.length !== 1) {
-      setStatus({ tone: "error", title: "每次只能拖入一个 DOCX 文件" });
-      return false;
-    }
-
-    const fileName = files[0]?.name || "";
-    if (!fileName.toLowerCase().endsWith(".docx")) {
-      setStatus({ tone: "error", title: "仅支持拖入 DOCX 文件", body: "旧版 DOC 请另存为 DOCX 后处理。" });
-      return false;
-    }
-
-    return true;
   }
 
   function changeRestoreInputKind(inputKind: InputSourceKind) {
@@ -883,7 +857,6 @@ export default function App() {
               onTextChange={changeSanitizeText}
               onClearText={clearSanitizeText}
               onSelectFiles={selectSanitizeFiles}
-              onDropFiles={dropSanitizeFiles}
               onPreview={previewEntities}
               onSelectOutput={selectSanitizeOutput}
               onSelectKeyFile={selectSanitizeKeyFile}
@@ -914,7 +887,6 @@ export default function App() {
               onTextChange={changeRestoreText}
               onClearText={clearRestoreText}
               onSelectFile={selectRestoreFile}
-              onDropFile={dropRestoreFile}
               onSelectMappingFile={selectMappingFile}
               onSelectOutput={selectRestoreOutput}
               onSelectKeyFile={selectRestoreKeyFile}
@@ -1184,7 +1156,6 @@ function SanitizeWorkflow({
   onTextChange,
   onClearText,
   onSelectFiles,
-  onDropFiles,
   onPreview,
   onSelectOutput,
   onSelectKeyFile,
@@ -1208,7 +1179,6 @@ function SanitizeWorkflow({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFiles: () => void;
-  onDropFiles: DroppedFilesHandler;
   onPreview: () => void;
   onSelectOutput: () => void;
   onSelectKeyFile: () => void;
@@ -1262,7 +1232,6 @@ function SanitizeWorkflow({
               onTextChange={onTextChange}
               onClearText={onClearText}
               onSelectFiles={onSelectFiles}
-              onDropFiles={onDropFiles}
             />
           </Panel>
 
@@ -1385,7 +1354,6 @@ function RestoreWorkflow({
   onTextChange,
   onClearText,
   onSelectFile,
-  onDropFile,
   onSelectMappingFile,
   onSelectOutput,
   onSelectKeyFile,
@@ -1400,7 +1368,6 @@ function RestoreWorkflow({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFile: () => void;
-  onDropFile: DroppedFilesHandler;
   onSelectMappingFile: () => void;
   onSelectOutput: () => void;
   onSelectKeyFile: () => void;
@@ -1428,7 +1395,6 @@ function RestoreWorkflow({
               onTextChange={onTextChange}
               onClearText={onClearText}
               onSelectFile={onSelectFile}
-              onDropFile={onDropFile}
             />
             <div className="mt-3">
               <FilePickCard
@@ -1928,8 +1894,7 @@ function InputSourcePanel({
   onInputKindChange,
   onTextChange,
   onClearText,
-  onSelectFiles,
-  onDropFiles
+  onSelectFiles
 }: {
   inputKind: InputSourceKind;
   files: DocumentSummary[];
@@ -1939,7 +1904,6 @@ function InputSourcePanel({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFiles: () => void;
-  onDropFiles: DroppedFilesHandler;
 }) {
   return (
     <div className="space-y-4">
@@ -1955,10 +1919,9 @@ function InputSourcePanel({
       {inputKind === "word" ? (
         <div className="space-y-3">
           <DocxUploadBox
-            title="拖拽 DOCX 到此处，或点击上传"
+            title="点击上传 DOCX"
             description="支持 Word DOCX。旧版 DOC 请另存为 DOCX 后处理。"
             onSelect={onSelectFiles}
-            onDropFiles={onDropFiles}
           />
           <FileList files={files} preview={preview} />
         </div>
@@ -1981,8 +1944,7 @@ function RestoreInputPanel({
   onInputKindChange,
   onTextChange,
   onClearText,
-  onSelectFile,
-  onDropFile
+  onSelectFile
 }: {
   inputKind: InputSourceKind;
   file: DocumentSummary | null;
@@ -1991,7 +1953,6 @@ function RestoreInputPanel({
   onTextChange: (text: string) => void;
   onClearText: () => void;
   onSelectFile: () => void;
-  onDropFile: DroppedFilesHandler;
 }) {
   return (
     <div className="space-y-4">
@@ -2007,10 +1968,9 @@ function RestoreInputPanel({
       {inputKind === "word" ? (
         <div className="space-y-3">
           <DocxUploadBox
-            title="拖拽 DOCX 到此处，或点击上传"
+            title="点击上传 DOCX"
             description="选择需要按映射还原的 DOCX 文件。"
             onSelect={onSelectFile}
-            onDropFiles={onDropFile}
           />
           <SelectedDocxFile file={file} />
         </div>
@@ -2077,39 +2037,12 @@ function TextResult({ title, value }: { title: string; value: string }) {
 function DocxUploadBox({
   title,
   description,
-  onSelect,
-  onDropFiles
+  onSelect
 }: {
   title: string;
   description: string;
   onSelect: () => void;
-  onDropFiles: DroppedFilesHandler;
 }) {
-  const [dragging, setDragging] = useState(false);
-
-  function handleDrag(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "copy";
-    if (event.type === "dragenter" || event.type === "dragover") {
-      setDragging(true);
-    }
-    if (event.type === "dragleave") {
-      setDragging(false);
-    }
-  }
-
-  function handleDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "copy";
-    setDragging(false);
-    const files = Array.from(event.dataTransfer.files);
-    if (files.length) {
-      void onDropFiles(files);
-    }
-  }
-
   return (
     <div
       role="button"
@@ -2121,18 +2054,9 @@ function DocxUploadBox({
           onSelect();
         }
       }}
-      onDragEnter={handleDrag}
-      onDragOver={handleDrag}
-      onDragLeave={handleDrag}
-      onDrop={handleDrop}
-      className={cn(
-        "flex min-h-[148px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-4 py-8 text-center transition",
-        dragging
-          ? "border-primary bg-primary-muted text-primary"
-          : "border-border-strong bg-surface-muted text-on-surface-muted hover:border-primary hover:bg-primary-muted/45"
-      )}
+      className="flex min-h-[148px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border-strong bg-surface-muted px-4 py-8 text-center text-on-surface-muted transition hover:border-primary hover:bg-primary-muted/45"
     >
-      <UploadCloud size={28} className={dragging ? "text-primary" : "text-on-surface-muted"} />
+      <UploadCloud size={28} className="text-on-surface-muted" />
       <p className="mt-3 text-sm font-bold text-on-surface">{title}</p>
       <p className="mt-1 max-w-md text-xs leading-5 text-on-surface-muted">{description}</p>
       <div className="mt-4">
@@ -2147,7 +2071,7 @@ function DocxUploadBox({
 
 function SelectedDocxFile({ file }: { file: DocumentSummary | null }) {
   if (!file) {
-    return <EmptyState icon={UploadCloud} title="尚未上传文件" body="拖拽 DOCX 到上传窗口，或点击上传。" />;
+    return <EmptyState icon={UploadCloud} title="尚未上传文件" body="点击上传 DOCX 文件。" />;
   }
 
   return (
@@ -2202,7 +2126,7 @@ function ImageHandlingSelector({
 
 function FileList({ files, preview }: { files: DocumentSummary[]; preview: PreviewResult | null }) {
   if (!files.length) {
-    return <EmptyState icon={UploadCloud} title="尚未上传文件" body="拖拽 DOCX 到上传窗口，或点击上传。" />;
+    return <EmptyState icon={UploadCloud} title="尚未上传文件" body="点击上传 DOCX 文件。" />;
   }
 
   const blockedByPath = new Map(preview?.blocked.map((item) => [item.path, item]) ?? []);

@@ -169,10 +169,6 @@ export interface DesktopApi {
     purpose: "sanitize" | "restore" | "mapping" | "keyFile";
     multi?: boolean;
   }) => Promise<ApiResponse<DocumentSummary[]>>;
-  importDroppedDocuments: (options: {
-    purpose: "sanitize" | "restore";
-    files: File[];
-  }) => Promise<ApiResponse<DocumentSummary[]>>;
   previewSanitize: (payload: {
     source: SanitizeSource;
   }) => Promise<ApiResponse<PreviewResult>>;

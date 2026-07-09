@@ -60,7 +60,6 @@ const {
   runSanitization
 } = require("../src/main/services/sanitizer-service");
 const {
-  assertSupported,
   summarizeFile
 } = require("../src/main/services/document-service");
 const {
@@ -75,7 +74,6 @@ const {
   clearAuthorizationsForTest
 } = require("../src/main/services/path-authorization-service");
 const {
-  droppedDocumentImportSchema,
   entitySetSaveSchema,
   sanitizeRunSchema,
   parseWithSchema
@@ -825,28 +823,6 @@ test("blocks unsupported file types through source preview", async () => {
   }
 });
 
-test("validates dropped docx import payloads", () => {
-  const parsed = parseWithSchema(droppedDocumentImportSchema, {
-    purpose: "sanitize",
-    filePaths: ["D:/work/fixture.docx"]
-  });
-  assert.deepEqual(parsed, {
-    purpose: "sanitize",
-    filePaths: ["D:/work/fixture.docx"]
-  });
-
-  assert.throws(() => parseWithSchema(droppedDocumentImportSchema, {
-    purpose: "sanitize",
-    filePaths: ["D:/work/one.docx", "D:/work/two.docx"]
-  }), /参数校验失败/);
-  assert.throws(() => parseWithSchema(droppedDocumentImportSchema, {
-    purpose: "mapping",
-    filePaths: ["D:/work/fixture.docx"]
-  }), /参数校验失败/);
-  assert.doesNotThrow(() => assertSupported("D:/work/fixture.docx"));
-  assert.throws(() => assertSupported("D:/work/fixture.pdf"), /仅支持 Word DOCX 文件/);
-});
-
 test("allows blank output directory for copy-only text sanitization", () => {
   const parsed = parseWithSchema(sanitizeRunSchema, {
     source: { kind: "text", text: "负责人李明" },
@@ -1063,7 +1039,7 @@ test("imports and exports entity sets as csv and json", async () => {
   }
 });
 
-test("saves entity sets while dropping blank draft items", async () => {
+test("saves entity sets while omitting blank draft items", async () => {
   clearEntitySetStoreForTest();
   try {
     assert.doesNotThrow(() => parseWithSchema(entitySetSaveSchema, {

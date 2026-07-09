@@ -3,7 +3,6 @@ const fs = require("node:fs/promises");
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
 const {
   documentImportSchema,
-  droppedDocumentImportSchema,
   entitySetDeleteSchema,
   entitySetExportSchema,
   entitySetImportSchema,
@@ -27,7 +26,7 @@ const {
   listEntitySets,
   saveEntitySet
 } = require("./services/entity-set-service");
-const { assertSupported, summarizeFile } = require("./services/document-service");
+const { summarizeFile } = require("./services/document-service");
 const {
   assertPreviewPayloadAuthorized,
   assertRestorePayloadAuthorized,
@@ -93,16 +92,6 @@ app.whenReady().then(() => {
 
     authorizeFilePaths(result.filePaths, options.purpose);
     return Promise.all(result.filePaths.map((filePath) => summarizeFile(filePath)));
-  }));
-
-  ipcMain.handle("document:import-dropped", async (_event, payload) => runSafely(async () => {
-    const options = parseWithSchema(droppedDocumentImportSchema, payload);
-    for (const filePath of options.filePaths) {
-      assertSupported(filePath);
-    }
-
-    authorizeFilePaths(options.filePaths, options.purpose);
-    return Promise.all(options.filePaths.map((filePath) => summarizeFile(filePath)));
   }));
 
   ipcMain.handle("output:get-last-directory", async () => runSafely(async () => {

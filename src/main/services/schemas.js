@@ -50,11 +50,6 @@ const documentImportSchema = z.object({
   multi: z.boolean().default(false)
 }).default({});
 
-const droppedDocumentImportSchema = z.object({
-  purpose: z.enum(["sanitize", "restore"]),
-  filePaths: z.array(z.string().min(1)).min(1).max(1)
-});
-
 const acknowledgementSchema = z.object({
   imageContentUnmodified: z.boolean().optional().default(false),
   imageHandling: z.enum(["keep", "delete"]).optional()
@@ -173,7 +168,6 @@ function parseWithSchema(schema, payload) {
 
 module.exports = {
   documentImportSchema,
-  droppedDocumentImportSchema,
   previewSchema,
   sanitizeRunSchema,
   outputFileActionSchema,
