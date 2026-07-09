@@ -39,6 +39,7 @@ const NON_PERSON_NAME_VALUES = new Set([
   "签章"
 ]);
 const NON_PERSON_NAME_SUFFIX_PATTERN = /(?:公司|集团|项目|工程|部门|单位|电话|手机|邮箱|地址|岗位|职务|意见|日期|时间|签章)$/;
+const CHINESE_MAINLAND_MOBILE_PATTERN = /^(\+?86[-\s]?)?(1[3-9]\d{9})$/;
 export const FAKE_PERSON_NAMES = [
   "张三",
   "李四",
@@ -127,6 +128,19 @@ function placeholderMaskedValue(stableId, occupiedValues, usedMaskedValues, crea
   return createFallback(stableId, occupiedValues, usedMaskedValues);
 }
 
+function mobilePhoneMaskedValue(originalValue, occupiedValues) {
+  const match = CHINESE_MAINLAND_MOBILE_PATTERN.exec(String(originalValue || "").trim());
+  if (!match) return "";
+
+  const prefix = match[1] || "";
+  const phoneNumber = match[2];
+  const candidate = `${prefix}${phoneNumber.slice(0, 3)}${"*".repeat(phoneNumber.length - 7)}${phoneNumber.slice(-4)}`;
+  if (candidate !== originalValue && !occupiedValues.has(candidate)) {
+    return candidate;
+  }
+  return "";
+}
+
 export function fakePersonMaskedValue(occupiedValues, usedMaskedValues) {
   for (const candidate of FAKE_PERSON_NAMES) {
     if (!occupiedValues.has(candidate) && !usedMaskedValues.has(candidate)) {
@@ -146,6 +160,9 @@ export function fakePersonMaskedValue(occupiedValues, usedMaskedValues) {
 export function defaultMaskedValue(originalValue, stableId, options = {}) {
   const occupiedValues = options.occupiedValues || new Set();
   const usedMaskedValues = options.usedMaskedValues || new Set();
+
+  const phoneMask = mobilePhoneMaskedValue(originalValue, occupiedValues);
+  if (phoneMask) return phoneMask;
 
   if (isLikelyPersonName(originalValue)) {
     return fakePersonMaskedValue(occupiedValues, usedMaskedValues);

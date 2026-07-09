@@ -16,6 +16,7 @@ const {
 } = require("../src/main/services/entity-service");
 const {
   clearEntitySetStoreForTest,
+  configureEntitySetStore,
   exportEntitySet,
   importEntitySet,
   listEntitySets,
@@ -169,7 +170,7 @@ test("detects structured entities and replaces longer strings first", () => {
   assert.ok(detected.some((entity) => entity.originalValue === "6222021234567890123"));
   assert.ok(detected.every((entity) => entity.type === "entity"));
   assert.deepEqual(detected.map((entity) => entity.stableId), ["ENTITY_001", "ENTITY_002", "ENTITY_003"]);
-  assert.deepEqual(detected.map((entity) => entity.maskedValue), ["<ENTITY_001>", "<ENTITY_002>", "<ENTITY_003>"]);
+  assert.deepEqual(detected.map((entity) => entity.maskedValue), ["138****8000", "<ENTITY_002>", "<ENTITY_003>"]);
 
   const text = "李明和明";
   const result = applySanitization(text, [
@@ -177,6 +178,38 @@ test("detects structured entities and replaces longer strings first", () => {
     manualEntity({ originalValue: "李明", maskedValue: "<PERSON_001>", stableId: "PERSON_001" })
   ]);
   assert.equal(result, "<PERSON_001>和<CHAR_001>");
+});
+
+test("masks phone numbers with first three digits and stars", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "电话+86 13800138000，备用86-13900139000。"
+    }]
+  }];
+
+  const detected = detectEntities(documents);
+  const byValue = new Map(detected.map((entity) => [entity.originalValue, entity]));
+  assert.equal(byValue.get("+86 13800138000").maskedValue, "+86 138****8000");
+  assert.equal(byValue.get("86-13900139000").maskedValue, "86-139****9000");
+});
+
+test("allows duplicate phone masks for same prefix phone numbers", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "电话13800138000，备用13899998000。"
+    }]
+  }];
+
+  assert.deepEqual(detectEntities(documents).map((entity) => entity.maskedValue), [
+    "138****8000",
+    "138****8000"
+  ]);
 });
 
 test("detects person names from common name fields", () => {
@@ -193,7 +226,7 @@ test("detects person names from common name fields", () => {
   const originals = detected.map((entity) => entity.originalValue);
   assert.deepEqual(originals, ["\u674e\u660e", "\u5f20\u4e09", "13800138000"]);
   assert.ok(detected.every((entity) => entity.type === "entity"));
-  assert.deepEqual(detected.map((entity) => entity.maskedValue), ["\u674e\u56db", "\u738b\u4e94", "<ENTITY_003>"]);
+  assert.deepEqual(detected.map((entity) => entity.maskedValue), ["\u674e\u56db", "\u738b\u4e94", "138****8000"]);
 
   const organizationFieldDocuments = [{
     docId: "doc2",
@@ -273,6 +306,33 @@ test("detects custom entity set entries with longest match and deduplication", (
   assert.equal(byValue.get("四川路航").locations.length, 1);
   assert.ok(detected.every((entity) => entity.type === "entity"));
   assert.equal(byValue.get("四川路桥").source, "custom");
+});
+
+test("detects ASCII custom entity aliases only on alphanumeric boundaries", () => {
+  const documents = [{
+    docId: "doc1",
+    path: "fixture.txt",
+    textSegments: [{
+      id: "doc1:text",
+      text: "SRBG、SRBG〔2026〕1号、SRBG-2026、XSRBG、SRBGX、fooSRBGbar、SRBG_2026。"
+    }]
+  }];
+  const entitySets = [{
+    id: "set1",
+    name: "测试词库",
+    enabled: true,
+    items: [{
+      id: "item1",
+      type: "company",
+      canonicalName: "四川路桥建设集团股份有限公司",
+      aliases: ["SRBG"],
+      enabled: true
+    }]
+  }];
+
+  const detected = detectEntities(documents, entitySets).filter((entity) => entity.source === "custom");
+  assert.deepEqual(detected.map((entity) => entity.originalValue), ["SRBG"]);
+  assert.equal(detected[0].locations.length, 3);
 });
 
 test("generates organization-style masked values for custom entity defaults", () => {
@@ -812,13 +872,96 @@ test("allows blank output directory for copy-only text sanitization", () => {
 test("preview includes built in shudao entity set entries", async () => {
   clearEntitySetStoreForTest();
   try {
-    const preview = await previewSanitization({ kind: "text", text: "四川路桥与四川路航联合施工。" });
+    const preview = await previewSanitization({
+      kind: "text",
+      text: "四川路桥与四川路航联合施工。SRBG、川路桥发〔2026〕1号、川路航发〔2026〕2号、蜀道司发〔2026〕3号。"
+    });
     const customValues = preview.entities
       .filter((entity) => entity.source === "custom")
       .map((entity) => entity.originalValue);
     assert.ok(customValues.includes("四川路桥"));
     assert.ok(customValues.includes("四川路航"));
+    assert.ok(customValues.includes("SRBG"));
+    assert.ok(customValues.includes("川路桥发"));
+    assert.ok(customValues.includes("川路航发"));
+    assert.ok(customValues.includes("蜀道司发"));
     assert.ok(preview.entities.every((entity) => entity.source !== "custom" || entity.type === "entity"));
+  } finally {
+    clearEntitySetStoreForTest();
+  }
+});
+
+test("merges updated built in aliases into existing local entity set store", async () => {
+  const tempDir = await makeTempDir();
+  clearEntitySetStoreForTest();
+  configureEntitySetStore(tempDir);
+  try {
+    await fs.writeFile(path.join(tempDir, "entity-sets.json"), JSON.stringify([{
+      id: "builtin-shudao-companies",
+      name: "蜀道系公司实体集",
+      enabled: true,
+      version: "2026.07.08",
+      updatedAt: "2026-07-08T00:00:00.000Z",
+      items: [
+        {
+          id: "shudao-group",
+          type: "company",
+          canonicalName: "蜀道投资集团有限责任公司",
+          aliases: ["蜀道集团"],
+          enabled: true
+        },
+        {
+          id: "shudao-srbc-listed",
+          type: "company",
+          canonicalName: "四川路桥建设集团股份有限公司",
+          aliases: ["四川路桥", "路桥股份"],
+          enabled: true
+        },
+        {
+          id: "srbc-luhang",
+          type: "company",
+          canonicalName: "四川路航建设工程有限责任公司",
+          aliases: ["四川路航", "路航公司"],
+          enabled: true
+        }
+      ]
+    }], null, 2), "utf8");
+
+    const [entitySet] = await listEntitySets();
+    const aliasesById = new Map(entitySet.items.map((item) => [item.id, item.aliases]));
+    assert.ok(aliasesById.get("shudao-group").includes("蜀道司发"));
+    assert.ok(aliasesById.get("shudao-srbc-listed").includes("SRBG"));
+    assert.ok(aliasesById.get("shudao-srbc-listed").includes("川路桥发"));
+    assert.ok(aliasesById.get("srbc-luhang").includes("川路航发"));
+    assert.equal(entitySet.version, "2026.07.09");
+  } finally {
+    clearEntitySetStoreForTest();
+  }
+});
+
+test("respects saved built in alias removals after default merge", async () => {
+  const tempDir = await makeTempDir();
+  clearEntitySetStoreForTest();
+  configureEntitySetStore(tempDir);
+  try {
+    const sets = await listEntitySets();
+    const builtin = sets.find((entitySet) => entitySet.id === "builtin-shudao-companies");
+    const updatedBuiltin = {
+      ...builtin,
+      items: builtin.items.map((item) => (
+        item.id === "shudao-srbc-listed"
+          ? { ...item, aliases: item.aliases.filter((alias) => alias !== "SRBG") }
+          : item
+      ))
+    };
+
+    await saveEntitySet(updatedBuiltin);
+    const reloaded = await listEntitySets();
+    const srbcAliases = reloaded
+      .find((entitySet) => entitySet.id === "builtin-shudao-companies")
+      .items.find((item) => item.id === "shudao-srbc-listed")
+      .aliases;
+    assert.equal(srbcAliases.includes("SRBG"), false);
   } finally {
     clearEntitySetStoreForTest();
   }
@@ -962,6 +1105,26 @@ test("previews sanitizes and restores pasted text", async () => {
   assert.match(restoreResult.restoredText, /13800138000/);
 });
 
+test("warns when reversible sanitization uses duplicate masked values", async () => {
+  const tempDir = await makeTempDir();
+  const text = "电话13800138000，备用13899998000。";
+  const credential = { method: "password", password: "restore-password" };
+  const preview = await previewSanitization({ kind: "text", text });
+  const docId = preview.files[0].docId;
+
+  const sanitizeResult = await runSanitization({
+    source: { kind: "text", text, docId },
+    mode: "reversible",
+    entities: preview.entities,
+    outputDir: tempDir,
+    credential
+  });
+
+  const item = sanitizeResult.results[0];
+  assert.equal(item.sanitizedText.match(/138\*{4}8000/g).length, 2);
+  assert.ok(item.warnings.some((warning) => warning.includes("重复脱敏值")));
+});
+
 test("sanitizes docx text nodes", async () => {
   const tempDir = await makeTempDir();
   const inputPath = path.join(tempDir, "fixture.docx");
@@ -977,6 +1140,107 @@ test("sanitizes docx text nodes", async () => {
   await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities: [manualEntity()] });
   const sanitized = await extractDocxDocument(outputPath, "doc1");
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+});
+
+test("sanitizes docx red-head titles split across text runs and drawing text", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "red-head-title.docx");
+  const outputPath = path.join(tempDir, "red-head-title.sanitized.docx");
+  const restoredPath = path.join(tempDir, "red-head-title.restored.docx");
+  const companyName = "四川公路桥梁建设集团有限公司";
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", [
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">',
+    '<w:body>',
+    '<w:p><w:r><w:t>四川公路</w:t></w:r><w:r><w:t>桥梁建设</w:t></w:r><w:r><w:t>集团有限公司文件</w:t></w:r></w:p>',
+    '<w:p><w:r><w:drawing><a:graphic><a:graphicData><a:p><a:r><a:t>四川公路桥梁</a:t></a:r><a:r><a:t>建设集团有限公司文件</a:t></a:r></a:p></a:graphicData></a:graphic></w:drawing></w:r></w:p>',
+    '</w:body></w:document>'
+  ].join(""));
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(inputPath, "doc1");
+  assert.match(extracted.textSegments.map((segment) => segment.text).join("\n"), new RegExp(companyName));
+
+  const entities = [manualEntity({ originalValue: companyName, maskedValue: "A公司", stableId: "ENTITY_001" })];
+  await sanitizeDocxDocument({ filePath: inputPath, outputPath, entities });
+  const sanitized = await extractDocxDocument(outputPath, "doc1");
+  const sanitizedText = sanitized.textSegments.map((segment) => segment.text).join("\n");
+  assert.doesNotMatch(sanitizedText, new RegExp(companyName));
+  assert.match(sanitizedText, /A公司文件/);
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  assert.doesNotMatch(documentXml, /四川公路|桥梁建设|集团有限公司/);
+
+  await restoreDocxDocument({ filePath: outputPath, outputPath: restoredPath, entities });
+  const restored = await extractDocxDocument(restoredPath, "doc1");
+  assert.match(restored.textSegments.map((segment) => segment.text).join("\n"), new RegExp(`${companyName}文件`));
+});
+
+test("does not sanitize docx text ranges across separate paragraphs", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "split-paragraphs.docx");
+  const outputPath = path.join(tempDir, "split-paragraphs.sanitized.docx");
+  const companyName = "四川公路桥梁建设集团有限公司";
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", [
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    '<w:body>',
+    '<w:p><w:r><w:t>四川公路</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>桥梁建设集团有限公司</w:t></w:r></w:p>',
+    '</w:body></w:document>'
+  ].join(""));
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity({ originalValue: companyName, maskedValue: "A公司", stableId: "ENTITY_001" })]
+  });
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  assert.doesNotMatch(documentXml, /A公司/);
+  assert.match(documentXml, /四川公路/);
+  assert.match(documentXml, /桥梁建设集团有限公司/);
+});
+
+test("does not sanitize docx text ranges across nested text box paragraphs", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "nested-textbox.docx");
+  const outputPath = path.join(tempDir, "nested-textbox.sanitized.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", [
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    '<w:body>',
+    '<w:p>',
+    '<w:r><w:t>OUT</w:t></w:r>',
+    '<w:r><w:txbxContent><w:p><w:r><w:t>IN</w:t></w:r><w:r><w:t>NER</w:t></w:r></w:p></w:txbxContent></w:r>',
+    '<w:r><w:t>TAIL</w:t></w:r>',
+    '</w:p>',
+    '</w:body></w:document>'
+  ].join(""));
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [
+      manualEntity({ originalValue: "OUTIN", maskedValue: "BAD", stableId: "ENTITY_001" }),
+      manualEntity({ id: "manual-2", originalValue: "INNER", maskedValue: "BOX", stableId: "ENTITY_002" })
+    ]
+  });
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  assert.doesNotMatch(documentXml, /BAD/);
+  assert.match(documentXml, /OUT/);
+  assert.match(documentXml, /BOX/);
+  assert.match(documentXml, /TAIL/);
+  assert.doesNotMatch(documentXml, /INNER/);
 });
 
 test("previews and sanitizes docx headers and footers", async () => {
@@ -1246,6 +1510,38 @@ test("sanitizes docx chart text", async () => {
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 });
 
+test("detects and sanitizes mixed chart paragraph and value text", async () => {
+  const tempDir = await makeTempDir();
+  const chartPath = path.join(tempDir, "mixed-chart.docx");
+  const sanitizedChartPath = path.join(tempDir, "mixed-chart.sanitized.docx");
+  const chartZip = new JSZip();
+  chartZip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  chartZip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body></w:body></w:document>');
+  chartZip.file("word/charts/chart1.xml", [
+    '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">',
+    '<c:title><a:p><a:r><a:t>图表标题</a:t></a:r></a:p></c:title>',
+    '<c:ser><c:tx><c:v>四川路桥</c:v></c:tx></c:ser>',
+    '</c:chartSpace>'
+  ].join(""));
+  await fs.writeFile(chartPath, await chartZip.generateAsync({ type: "nodebuffer" }));
+
+  const extracted = await extractDocxDocument(chartPath, "doc1");
+  const extractedText = extracted.textSegments.map((segment) => segment.text).join("\n");
+  assert.match(extractedText, /图表标题/);
+  assert.match(extractedText, /四川路桥/);
+
+  await sanitizeDocxDocument({
+    filePath: chartPath,
+    outputPath: sanitizedChartPath,
+    entities: [manualEntity({ originalValue: "四川路桥", maskedValue: "A公司", stableId: "ENTITY_001" })]
+  });
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(sanitizedChartPath));
+  const chartXml = await sanitizedZip.file("word/charts/chart1.xml").async("text");
+  assert.match(chartXml, /图表标题/);
+  assert.match(chartXml, /A公司/);
+  assert.doesNotMatch(chartXml, /四川路桥/);
+});
+
 test("sanitizes and restores docx custom xml text and attributes", async () => {
   const tempDir = await makeTempDir();
   const customPath = path.join(tempDir, "custom.docx");
@@ -1273,9 +1569,9 @@ test("sanitizes and restores docx custom xml text and attributes", async () => {
   const customXml = await sanitizedZip.file("customXml/item1.xml").async("text");
   assert.doesNotMatch(customXml, /李明|13800138000|liming@example\.com|6222021234567890123/);
   assert.match(customXml, /PERSON_001/);
+  assert.match(customXml, /138\*{4}8000/);
   assert.match(customXml, /ENTITY_001/);
   assert.match(customXml, /ENTITY_002/);
-  assert.match(customXml, /ENTITY_003/);
   assert.match(customXml, /xsi:type="text"/);
 
   await restoreDocxDocument({ filePath: sanitizedCustomPath, outputPath: restoredCustomPath, entities });
@@ -1456,7 +1752,7 @@ test("sanitizes xlsx headers and footers", async () => {
   assert.doesNotMatch(sanitizedSheet.headerFooter.oddHeader, /李明/);
   assert.doesNotMatch(sanitizedSheet.headerFooter.oddFooter, /13800138000/);
   assert.match(sanitizedSheet.headerFooter.oddHeader, /张三/);
-  assert.match(sanitizedSheet.headerFooter.oddFooter, /ENTITY_002/);
+  assert.match(sanitizedSheet.headerFooter.oddFooter, /138\*{4}8000/);
 });
 
 test("blocks xlsx unconfirmed structured values in data validations", async () => {
@@ -1501,7 +1797,7 @@ test("detects and sanitizes numeric xlsx sensitive cells", async () => {
   const sanitized = await extractXlsxDocument(outputPath, "doc1");
   const text = sanitized.textSegments.map((segment) => segment.text).join("\n");
   assert.doesNotMatch(text, /13800138000/);
-  assert.match(text, /<ENTITY_001>/);
+  assert.match(text, /138\*{4}8000/);
 });
 
 test("sanitizes text PDF by regenerating safe PDF", async () => {

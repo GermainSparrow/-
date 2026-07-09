@@ -7,6 +7,8 @@ const {
 } = require("../../shared/person-masking");
 
 const GENERIC_ENTITY_TYPE = "entity";
+const ASCII_ALPHA_NUMERIC_PATTERN = /[A-Za-z0-9]/;
+const ASCII_WORD_CHAR_PATTERN = /[A-Za-z0-9_]/;
 
 const TYPE_PREFIX = {
   entity: "ENTITY",
@@ -213,6 +215,7 @@ function collectCustomTerms(entitySets = []) {
         seen.add(key);
         terms.push({
           value,
+          requiresAsciiBoundary: ASCII_ALPHA_NUMERIC_PATTERN.test(value),
           maskedValue: String(item.maskedValue || "").trim(),
           order: terms.length
         });
@@ -230,6 +233,16 @@ function overlaps(existingRanges, start, end) {
   return existingRanges.some((range) => start < range.end && end > range.start);
 }
 
+function hasAsciiWordCharAt(text, index) {
+  return index >= 0 && index < text.length && ASCII_WORD_CHAR_PATTERN.test(text[index]);
+}
+
+function matchesCustomTermBoundary(text, term, start) {
+  if (!term.requiresAsciiBoundary) return true;
+  return !hasAsciiWordCharAt(text, start - 1) &&
+    !hasAsciiWordCharAt(text, start + term.value.length);
+}
+
 function detectCustomEntities(documents, entitySets, byDocAndValue) {
   const terms = collectCustomTerms(entitySets);
   if (!terms.length) return;
@@ -241,7 +254,7 @@ function detectCustomEntities(documents, entitySets, byDocAndValue) {
         let index = segment.text.indexOf(term.value);
         while (index !== -1) {
           const end = index + term.value.length;
-          if (!overlaps(occupiedRanges, index, end)) {
+          if (matchesCustomTermBoundary(segment.text, term, index) && !overlaps(occupiedRanges, index, end)) {
             occupiedRanges.push({ start: index, end });
             addEntitySeed(byDocAndValue, document, segment, term.value, index, "custom", term.maskedValue);
           }

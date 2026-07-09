@@ -108,6 +108,60 @@ function defaultSets() {
   return normalizeEntitySets(clone(defaultEntitySets));
 }
 
+function compareVersion(left, right) {
+  const leftParts = String(left || "").split(".").map((part) => Number(part) || 0);
+  const rightParts = String(right || "").split(".").map((part) => Number(part) || 0);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index] || 0;
+    const rightPart = rightParts[index] || 0;
+    if (leftPart !== rightPart) return leftPart - rightPart;
+  }
+  return 0;
+}
+
+function mergeDefaultBuiltinUpdates(entitySets) {
+  const builtinDefaultsById = new Map(
+    defaultSets()
+      .filter((entitySet) => entitySet.id.startsWith("builtin-"))
+      .map((entitySet) => [entitySet.id, entitySet])
+  );
+
+  return entitySets.map((entitySet) => {
+    const defaultEntitySet = builtinDefaultsById.get(entitySet.id);
+    if (!defaultEntitySet) return entitySet;
+    if (compareVersion(entitySet.version, defaultEntitySet.version) >= 0) return entitySet;
+
+    const defaultItemsById = new Map(defaultEntitySet.items.map((item) => [item.id, item]));
+    let changed = false;
+    const items = entitySet.items.map((item) => {
+      const defaultItem = defaultItemsById.get(item.id);
+      if (!defaultItem) return item;
+
+      const aliases = uniqueStrings([...(item.aliases || []), ...(defaultItem.aliases || [])])
+        .filter((alias) => alias !== item.canonicalName);
+      const currentAliases = item.aliases || [];
+      const aliasesChanged = aliases.length !== currentAliases.length ||
+        aliases.some((alias, index) => alias !== currentAliases[index]);
+      if (!aliasesChanged) return item;
+
+      changed = true;
+      return {
+        ...item,
+        aliases
+      };
+    });
+
+    if (!changed) return entitySet;
+    return {
+      ...entitySet,
+      version: defaultEntitySet.version,
+      updatedAt: defaultEntitySet.updatedAt,
+      items
+    };
+  });
+}
+
 function storeFilePath() {
   if (!storeDirectory) return null;
   return path.join(storeDirectory, STORE_FILE_NAME);
@@ -134,11 +188,11 @@ async function readEntitySets() {
   await ensureStoreFile();
   const filePath = storeFilePath();
   if (!filePath) {
-    return clone(memoryEntitySets);
+    return mergeDefaultBuiltinUpdates(clone(memoryEntitySets));
   }
 
   try {
-    return normalizeEntitySets(JSON.parse(await fs.readFile(filePath, "utf8")));
+    return mergeDefaultBuiltinUpdates(normalizeEntitySets(JSON.parse(await fs.readFile(filePath, "utf8"))));
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError("ENTITY_SET_READ_FAILED", "无法读取本地实体集配置", error.message);

@@ -40,6 +40,28 @@ function filterEntitiesForDoc(entities, docId) {
   return entities.filter((entity) => entity.docId === docId && entity.enabled !== false);
 }
 
+function duplicateMaskedValueWarnings(entities, mode) {
+  if (mode !== "reversible") return [];
+
+  const originalsByMaskedValue = new Map();
+  for (const entity of entities) {
+    const maskedValue = String(entity.maskedValue || "").trim();
+    const originalValue = String(entity.originalValue || "").trim();
+    if (!maskedValue || !originalValue) continue;
+    if (!originalsByMaskedValue.has(maskedValue)) {
+      originalsByMaskedValue.set(maskedValue, new Set());
+    }
+    originalsByMaskedValue.get(maskedValue).add(originalValue);
+  }
+
+  const duplicateCount = Array.from(originalsByMaskedValue.values())
+    .filter((originals) => originals.size > 1)
+    .length;
+  return duplicateCount
+    ? [`存在 ${duplicateCount} 个重复脱敏值，可恢复还原时无法唯一区分对应原文，请复核映射或改用唯一脱敏值。`]
+    : [];
+}
+
 function safeDocumentLabel(docId) {
   return `document-${docId}`;
 }
@@ -286,6 +308,10 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
       acknowledgements,
       writeTextFile
     });
+    const warnings = [
+      ...sanitizeResult.warnings,
+      ...duplicateMaskedValueWarnings(docEntities, mode)
+    ];
     if (sanitizeResult.outputPath) {
       writtenPaths.push(sanitizeResult.outputPath);
     }
@@ -316,7 +342,7 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
           sourceLabel: summary.sourceLabel,
           docId: summary.docId,
           entitySummary: summarizeEntities(docEntities),
-          warnings: sanitizeResult.warnings,
+          warnings,
           outputs,
           sanitizedText: sanitizeResult.sanitizedText || null
         }

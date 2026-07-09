@@ -3,7 +3,15 @@ const path = require("node:path");
 const JSZip = require("jszip");
 const { AppError } = require("./app-error");
 const { applyRestoration, applySanitization, detectStructuredValues, findOriginalLeaks } = require("./entity-service");
-const { collectGenericXmlText, collectXmlText, decodeXml, encodeXml, transformGenericXmlText, transformXmlText } = require("./xml-utils");
+const {
+  collectGenericXmlText,
+  collectXmlTextWithRangeBoundaries,
+  decodeXml,
+  encodeXml,
+  transformGenericXmlText,
+  transformXmlText,
+  transformXmlTextRanges
+} = require("./xml-utils");
 
 const CUSTOM_XML_WARNING = "Word 文档包含自定义 XML，已纳入脱敏/还原处理；如文档依赖表单绑定或第三方系统数据，请复核输出文件。";
 const IMAGE_CONTENT_WARNING = "Word 文档包含图片，图片内内容无法修改；请选择保留图片或删除全部图片后继续。";
@@ -256,7 +264,7 @@ function collectDocxText(fileName, xml) {
     return collectGenericXmlText(xml);
   }
 
-  const texts = collectXmlText(xml);
+  const texts = collectXmlTextWithRangeBoundaries(xml);
   if (fileName === "word/settings.xml") {
     texts.push(...collectTextAttributes(xml, /<(?:[A-Za-z_][\w.-]*:)?docVar\b[^>]*>/g, ["name", "val"]));
   }
@@ -269,12 +277,33 @@ function collectDocxText(fileName, xml) {
   return texts;
 }
 
-function transformDocxText(fileName, xml, transform) {
+function replacementPairsForMode(entities, mode) {
+  const replacements = [];
+  for (const entity of entities) {
+    if (entity.enabled === false || !entity.originalValue) continue;
+    if (mode === "restore") {
+      if (entity.maskedValue) {
+        replacements.push({ from: entity.maskedValue, to: entity.originalValue });
+      }
+      if (entity.stableId) {
+        replacements.push({ from: `<${entity.stableId}>`, to: entity.originalValue });
+      }
+      continue;
+    }
+    if (entity.maskedValue) {
+      replacements.push({ from: entity.originalValue, to: entity.maskedValue });
+    }
+  }
+  return replacements;
+}
+
+function transformDocxText(fileName, xml, transform, replacements = []) {
   if (isCustomXmlPath(fileName)) {
     return transformGenericXmlText(xml, transform);
   }
 
-  let transformedXml = transformXmlText(xml, transform);
+  let transformedXml = transformXmlTextRanges(xml, replacements);
+  transformedXml = transformXmlText(transformedXml, transform);
   if (fileName === "word/settings.xml") {
     transformedXml = transformTextAttributes(
       transformedXml,
@@ -406,6 +435,7 @@ async function transformDocxFile({ filePath, outputPath, entities, mode, acknowl
   const transform = mode === "restore"
     ? (text) => applyRestoration(text, entities)
     : (text) => applySanitization(text, entities);
+  const replacements = replacementPairsForMode(entities, mode);
 
   for (const fileName of Object.keys(zip.files)) {
     if (zip.files[fileName].dir || (!fileName.endsWith(".xml") && !fileName.endsWith(".rels"))) continue;
@@ -430,7 +460,7 @@ async function transformDocxFile({ filePath, outputPath, entities, mode, acknowl
     if (/<w:(del|ins)\b/.test(xml) || /<w:vanish\b/.test(xml)) {
       throw new AppError("BLOCKED_UNCONFIRMED_CONTENT", "Word 文档包含修订记录或隐藏文本，请接受修订并清理隐藏内容后重试");
     }
-    let transformedXml = transformDocxText(fileName, xml, transform);
+    let transformedXml = transformDocxText(fileName, xml, transform, replacements);
     transformedXml = removeImageReferencesFromXml(transformedXml, imageRelationshipIds);
     zip.file(fileName, transformedXml);
   }
