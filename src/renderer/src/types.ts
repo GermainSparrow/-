@@ -128,6 +128,7 @@ export interface SanitizeResultItem {
 
 export interface SanitizeResult {
   results: SanitizeResultItem[];
+  blocked?: PreviewBlockedFile[];
 }
 
 export interface MappingUnlockResult {
@@ -159,6 +160,8 @@ export type SanitizeSource =
   | { kind: "word"; path: string; docId?: string }
   | { kind: "text"; text: string; docId?: string };
 
+export type BatchSanitizeSource = { kind: "word"; path: string; docId?: string };
+
 export type RestoreSource =
   | { kind: "word"; path: string }
   | { kind: "text"; text: string };
@@ -172,12 +175,26 @@ export interface DesktopApi {
   previewSanitize: (payload: {
     source: SanitizeSource;
   }) => Promise<ApiResponse<PreviewResult>>;
+  previewSanitizeBatch: (payload: {
+    sources: BatchSanitizeSource[];
+  }) => Promise<ApiResponse<PreviewResult>>;
   runSanitize: (payload: {
     source: SanitizeSource;
     mode: SanitizeMode;
     entities: EntityItem[];
     outputDir?: string;
     textOutputMode?: TextOutputMode;
+    credential?: Credential;
+    acknowledgements?: {
+      imageContentUnmodified?: boolean;
+      imageHandling?: ImageHandling;
+    };
+  }) => Promise<ApiResponse<SanitizeResult>>;
+  runSanitizeBatch: (payload: {
+    sources: Array<BatchSanitizeSource & { docId: string }>;
+    mode: SanitizeMode;
+    entities: EntityItem[];
+    outputDir: string;
     credential?: Credential;
     acknowledgements?: {
       imageContentUnmodified?: boolean;

@@ -9,14 +9,23 @@ const {
   entitySetSaveSchema,
   outputFileActionSchema,
   parseWithSchema,
+  previewBatchSchema,
   previewSchema,
   restoreRunSchema,
+  sanitizeBatchRunSchema,
   sanitizeRunSchema,
   unlockMappingSchema
 } = require("./services/schemas");
 const { AppError } = require("./services/app-error");
 const { runSafely } = require("./services/response");
-const { previewSanitization, runRestoration, runSanitization, unlockMapping } = require("./services/sanitizer-service");
+const {
+  previewSanitization,
+  previewSanitizationBatch,
+  runRestoration,
+  runSanitization,
+  runSanitizationBatch,
+  unlockMapping
+} = require("./services/sanitizer-service");
 const { previewOutputFile } = require("./services/output-preview-service");
 const {
   configureEntitySetStore,
@@ -29,8 +38,10 @@ const {
 const { summarizeFile } = require("./services/document-service");
 const {
   assertPreviewPayloadAuthorized,
+  assertPreviewBatchPayloadAuthorized,
   assertRestorePayloadAuthorized,
   assertSanitizePayloadAuthorized,
+  assertSanitizeBatchPayloadAuthorized,
   assertUnlockMappingPayloadAuthorized,
   assertAuthorizedOutputFilePath,
   authorizeFilePaths,
@@ -156,10 +167,24 @@ app.whenReady().then(() => {
     return previewSanitization(data.source);
   }));
 
+  ipcMain.handle("sanitize:preview-batch", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(previewBatchSchema, payload);
+    assertPreviewBatchPayloadAuthorized(data);
+    return previewSanitizationBatch(data.sources);
+  }));
+
   ipcMain.handle("sanitize:run", async (_event, payload) => runSafely(async () => {
     const data = parseWithSchema(sanitizeRunSchema, payload);
     assertSanitizePayloadAuthorized(data);
     const result = await runSanitization(data);
+    authorizeSanitizeOutputFiles(result);
+    return result;
+  }));
+
+  ipcMain.handle("sanitize:run-batch", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(sanitizeBatchRunSchema, payload);
+    assertSanitizeBatchPayloadAuthorized(data);
+    const result = await runSanitizationBatch(data);
     authorizeSanitizeOutputFiles(result);
     return result;
   }));

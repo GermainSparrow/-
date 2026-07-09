@@ -83,6 +83,12 @@ function assertPreviewPayloadAuthorized(payload) {
   }
 }
 
+function assertPreviewBatchPayloadAuthorized(payload) {
+  for (const source of payload.sources) {
+    assertAuthorizedFilePath(source.path, "sanitize");
+  }
+}
+
 function assertSanitizePayloadAuthorized(payload) {
   if (payload.source.kind === "word") {
     assertAuthorizedFilePath(payload.source.path, "sanitize");
@@ -98,6 +104,14 @@ function assertSanitizePayloadAuthorized(payload) {
     }
     assertAuthorizedOutputDirectory(payload.outputDir);
   }
+  assertCredentialAuthorized(payload.credential);
+}
+
+function assertSanitizeBatchPayloadAuthorized(payload) {
+  for (const source of payload.sources) {
+    assertAuthorizedFilePath(source.path, "sanitize");
+  }
+  assertAuthorizedOutputDirectory(payload.outputDir);
   assertCredentialAuthorized(payload.credential);
 }
 
@@ -125,7 +139,9 @@ function clearAuthorizationsForTest() {
 
 module.exports = {
   assertAuthorizedOutputFilePath,
+  assertPreviewBatchPayloadAuthorized,
   assertPreviewPayloadAuthorized,
+  assertSanitizeBatchPayloadAuthorized,
   assertRestorePayloadAuthorized,
   assertSanitizePayloadAuthorized,
   assertUnlockMappingPayloadAuthorized,

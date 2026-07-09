@@ -56,7 +56,9 @@ const {
   clearPreviewedSourcesForTest,
   createTextDocId,
   previewSanitization,
+  previewSanitizationBatch,
   runRestoration,
+  runSanitizationBatch,
   runSanitization
 } = require("../src/main/services/sanitizer-service");
 const {
@@ -64,8 +66,10 @@ const {
 } = require("../src/main/services/document-service");
 const {
   assertAuthorizedOutputFilePath,
+  assertPreviewBatchPayloadAuthorized,
   assertPreviewPayloadAuthorized,
   assertRestorePayloadAuthorized,
+  assertSanitizeBatchPayloadAuthorized,
   assertSanitizePayloadAuthorized,
   authorizeFilePaths,
   authorizeOutputDirectory,
@@ -75,6 +79,8 @@ const {
 } = require("../src/main/services/path-authorization-service");
 const {
   entitySetSaveSchema,
+  previewBatchSchema,
+  sanitizeBatchRunSchema,
   sanitizeRunSchema,
   parseWithSchema
 } = require("../src/main/services/schemas");
@@ -600,18 +606,34 @@ test("rejects unapproved ipc paths before service execution and skips text file 
     outputDir: tempDir,
     credential: { method: "keyFile", keyFilePath }
   };
+  const batchPayload = {
+    sources: [{ kind: "word", path: inputPath, docId }],
+    mode: "reversible",
+    entities: [manualEntity({ docId, filePath: inputPath })],
+    outputDir: tempDir,
+    credential: { method: "keyFile", keyFilePath },
+    acknowledgements: {}
+  };
 
   clearAuthorizationsForTest();
   assert.throws(() => assertPreviewPayloadAuthorized({ source: { kind: "word", path: inputPath } }), (error) => {
+    return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
+  });
+  assert.throws(() => assertPreviewBatchPayloadAuthorized({ sources: [{ kind: "word", path: inputPath }] }), (error) => {
     return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
   });
   assert.doesNotThrow(() => assertPreviewPayloadAuthorized({ source: { kind: "text", text: "负责人李明" } }));
   assert.throws(() => assertSanitizePayloadAuthorized(payload), (error) => {
     return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
   });
+  assert.throws(() => assertSanitizeBatchPayloadAuthorized(batchPayload), (error) => {
+    return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "sanitize";
+  });
 
   authorizeFilePaths([inputPath], "sanitize");
+  assert.doesNotThrow(() => assertPreviewBatchPayloadAuthorized({ sources: [{ kind: "word", path: inputPath }] }));
   assert.throws(() => assertSanitizePayloadAuthorized(payload), /输出目录未通过目录选择器授权/);
+  assert.throws(() => assertSanitizeBatchPayloadAuthorized(batchPayload), /输出目录未通过目录选择器授权/);
   const outputPath = path.join(tempDir, "result.docx");
   const nestedOutputPath = path.join(tempDir, "nested", "result.docx");
   assert.throws(() => assertAuthorizedOutputFilePath(outputPath), (error) => {
@@ -639,9 +661,13 @@ test("rejects unapproved ipc paths before service execution and skips text file 
   assert.throws(() => assertSanitizePayloadAuthorized(payload), (error) => {
     return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "keyFile";
   });
+  assert.throws(() => assertSanitizeBatchPayloadAuthorized(batchPayload), (error) => {
+    return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "keyFile";
+  });
 
   authorizeFilePaths([keyFilePath], "keyFile");
   assert.doesNotThrow(() => assertSanitizePayloadAuthorized(payload));
+  assert.doesNotThrow(() => assertSanitizeBatchPayloadAuthorized(batchPayload));
 
   clearAuthorizationsForTest();
   authorizeFilePaths([keyFilePath], "keyFile");
@@ -805,6 +831,133 @@ test("does not block docx output when detected person names use fake masked valu
   assert.doesNotMatch(sanitizedText, /李明|13800138000/);
 });
 
+test("previews multiple docx files in one batch", async () => {
+  const tempDir = await makeTempDir();
+  const firstPath = path.join(tempDir, "first.docx");
+  const secondPath = path.join(tempDir, "second.docx");
+  await writeDocxWithText(firstPath, "负责人李明，电话13800138000。");
+  await writeDocxWithText(secondPath, "联系人王强，邮箱 wangqiang@example.com。");
+
+  const preview = await previewSanitizationBatch([
+    { kind: "word", path: firstPath },
+    { kind: "word", path: secondPath }
+  ]);
+
+  assert.equal(preview.sourceKind, "word");
+  assert.equal(preview.files.length, 2);
+  assert.equal(preview.blocked.length, 0);
+  assert.equal(new Set(preview.files.map((file) => file.docId)).size, 2);
+  assert.ok(preview.entities.some((entity) => entity.docId === preview.files[0].docId));
+  assert.ok(preview.entities.some((entity) => entity.docId === preview.files[1].docId));
+});
+
+test("keeps batch preview going when one docx is blocked", async () => {
+  const tempDir = await makeTempDir();
+  const goodPath = path.join(tempDir, "good.docx");
+  const badPath = path.join(tempDir, "bad.pdf");
+  await writeDocxWithText(goodPath, "负责人李明，电话13800138000。");
+  await fs.writeFile(badPath, "not a docx", "utf8");
+
+  const preview = await previewSanitizationBatch([
+    { kind: "word", path: goodPath },
+    { kind: "word", path: badPath }
+  ]);
+
+  assert.equal(preview.files.length, 1);
+  assert.equal(preview.blocked.length, 1);
+  assert.equal(preview.blocked[0].path, badPath);
+  assert.equal(preview.entities.every((entity) => entity.docId === preview.files[0].docId), true);
+});
+
+test("sanitizes multiple docx files in one irreversible batch", async () => {
+  const tempDir = await makeTempDir();
+  const firstPath = path.join(tempDir, "first.docx");
+  const secondPath = path.join(tempDir, "second.docx");
+  await writeDocxWithText(firstPath, "负责人李明，电话13800138000。");
+  await writeDocxWithText(secondPath, "联系人王强，邮箱 wangqiang@example.com。");
+  const preview = await previewSanitizationBatch([
+    { kind: "word", path: firstPath },
+    { kind: "word", path: secondPath }
+  ]);
+
+  const result = await runSanitizationBatch({
+    sources: preview.files.map((file) => ({ kind: "word", path: file.path, docId: file.docId })),
+    mode: "irreversible",
+    entities: preview.entities,
+    outputDir: tempDir
+  });
+
+  assert.equal(result.blocked.length, 0);
+  assert.equal(result.results.length, 2);
+  for (const item of result.results) {
+    assert.ok(item.outputs.sanitizedFile);
+    assert.equal(item.outputs.mappingFile, null);
+  }
+  const firstText = (await extractDocxDocument(result.results[0].outputs.sanitizedFile, "first"))
+    .textSegments.map((segment) => segment.text).join("\n");
+  const secondText = (await extractDocxDocument(result.results[1].outputs.sanitizedFile, "second"))
+    .textSegments.map((segment) => segment.text).join("\n");
+  assert.doesNotMatch(firstText, /李明|13800138000/);
+  assert.doesNotMatch(secondText, /王强|wangqiang@example\.com/);
+});
+
+test("sanitizes multiple docx files in one reversible batch", async () => {
+  const tempDir = await makeTempDir();
+  const firstPath = path.join(tempDir, "first-reversible.docx");
+  const secondPath = path.join(tempDir, "second-reversible.docx");
+  await writeDocxWithText(firstPath, "负责人李明，电话13800138000。");
+  await writeDocxWithText(secondPath, "联系人王强，邮箱 wangqiang@example.com。");
+  const preview = await previewSanitizationBatch([
+    { kind: "word", path: firstPath },
+    { kind: "word", path: secondPath }
+  ]);
+  const credential = { method: "password", password: "batch-password" };
+
+  const result = await runSanitizationBatch({
+    sources: preview.files.map((file) => ({ kind: "word", path: file.path, docId: file.docId })),
+    mode: "reversible",
+    entities: preview.entities,
+    outputDir: tempDir,
+    credential
+  });
+
+  assert.equal(result.blocked.length, 0);
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results.filter((item) => item.outputs.mappingFile).length, 2);
+  for (const item of result.results) {
+    const mappingPackage = JSON.parse(await fs.readFile(item.outputs.mappingFile, "utf8"));
+    const mapping = decryptMappingPackage(mappingPackage, credential);
+    assert.equal(mapping.docId, item.docId);
+    assert.ok(mapping.entities.length > 0);
+  }
+});
+
+test("keeps batch sanitization going when one file fails", async () => {
+  const tempDir = await makeTempDir();
+  const stablePath = path.join(tempDir, "stable.docx");
+  const changedPath = path.join(tempDir, "changed.docx");
+  await writeDocxWithText(stablePath, "负责人李明，电话13800138000。");
+  await writeDocxWithText(changedPath, "联系人王强，邮箱 wangqiang@example.com。");
+  const preview = await previewSanitizationBatch([
+    { kind: "word", path: stablePath },
+    { kind: "word", path: changedPath }
+  ]);
+  await writeDocxWithText(changedPath, "联系人赵六，邮箱 zhaoliu@example.com。");
+
+  const result = await runSanitizationBatch({
+    sources: preview.files.map((file) => ({ kind: "word", path: file.path, docId: file.docId })),
+    mode: "irreversible",
+    entities: preview.entities,
+    outputDir: tempDir
+  });
+
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].sourcePath, stablePath);
+  assert.equal(result.blocked.length, 1);
+  assert.equal(result.blocked[0].path, changedPath);
+  assert.equal(result.blocked[0].error.code, "DOCUMENT_CHANGED");
+});
+
 test("blocks unsupported file types through source preview", async () => {
   const tempDir = await makeTempDir();
   const extensions = [".doc", ".pdf", ".xlsx", ".txt", ".md"];
@@ -821,6 +974,39 @@ test("blocks unsupported file types through source preview", async () => {
       assert.equal(preview.blocked[0].error.code, "UNSUPPORTED_FILE_TYPE");
     }
   }
+});
+
+test("validates batch sanitize schemas", () => {
+  const previewPayload = parseWithSchema(previewBatchSchema, {
+    sources: [{ kind: "word", path: "D:/work/one.docx" }]
+  });
+  assert.deepEqual(previewPayload, {
+    sources: [{ kind: "word", path: "D:/work/one.docx" }]
+  });
+  assert.throws(() => parseWithSchema(previewBatchSchema, {
+    sources: [{ kind: "text", text: "负责人李明" }]
+  }), /参数校验失败/);
+
+  const runPayload = parseWithSchema(sanitizeBatchRunSchema, {
+    sources: [{ kind: "word", path: "D:/work/one.docx", docId: "doc1" }],
+    mode: "irreversible",
+    entities: [manualEntity({ docId: "doc1", filePath: "D:/work/one.docx" })],
+    outputDir: "D:/out",
+    acknowledgements: {}
+  });
+  assert.equal(runPayload.sources[0].docId, "doc1");
+  assert.throws(() => parseWithSchema(sanitizeBatchRunSchema, {
+    sources: [{ kind: "word", path: "D:/work/one.docx" }],
+    mode: "irreversible",
+    entities: [],
+    outputDir: "D:/out"
+  }), /参数校验失败/);
+  assert.throws(() => parseWithSchema(sanitizeBatchRunSchema, {
+    sources: [{ kind: "word", path: "D:/work/one.docx", docId: "doc1" }],
+    mode: "reversible",
+    entities: [manualEntity({ docId: "doc1", filePath: "D:/work/one.docx" })],
+    outputDir: "D:/out"
+  }), /参数校验失败/);
 });
 
 test("allows blank output directory for copy-only text sanitization", () => {

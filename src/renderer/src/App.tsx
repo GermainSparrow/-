@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "
 import { defaultMaskedValue as createDefaultMaskedValue } from "../../shared/person-masking";
 import type {
   ApiResponse,
+  BatchSanitizeSource,
   Credential,
   CredentialMethod,
   DesktopApi,
@@ -83,6 +84,7 @@ interface SanitizeState {
   preview: PreviewResult | null;
   entities: EntityItem[];
   results: SanitizeResultItem[];
+  resultBlocked: PreviewBlockedFile[];
   running: boolean;
   previewing: boolean;
   imageHandling: ImageHandling | null;
@@ -117,6 +119,7 @@ const INITIAL_SANITIZE_STATE: SanitizeState = {
   preview: null,
   entities: [],
   results: [],
+  resultBlocked: [],
   running: false,
   previewing: false,
   imageHandling: null
@@ -135,9 +138,22 @@ const INITIAL_RESTORE_STATE: RestoreState = {
   running: false
 };
 
-const EMPTY_MANUAL_ENTITY = {
+interface ManualEntityDraft {
+  originalValue: string;
+  maskedValue: string;
+  docId: string;
+}
+
+interface ManualDocOption {
+  docId: string;
+  label: string;
+  path: string;
+}
+
+const EMPTY_MANUAL_ENTITY: ManualEntityDraft = {
   originalValue: "",
-  maskedValue: ""
+  maskedValue: "",
+  docId: ""
 };
 
 function cn(...classes: Array<string | false | null | undefined>) {
@@ -333,15 +349,50 @@ export default function App() {
     }
   }
 
+  function docIdForSanitizeFile(file: DocumentSummary, state = sanitize) {
+    return state.preview?.files.find((item) => item.path === file.path)?.docId || file.docId || "";
+  }
+
+  function sanitizeDocOptions(state = sanitize) {
+    return state.inputKind === "word"
+      ? state.files
+        .map((file) => ({
+          docId: docIdForSanitizeFile(file, state),
+          label: file.name,
+          path: file.path
+        }))
+        .filter((item) => Boolean(item.docId))
+      : state.preview?.files.map((file) => ({
+        docId: file.docId,
+        label: file.sourceLabel,
+        path: file.path
+      })) ?? [];
+  }
+
   function currentSanitizeDocId(state = sanitize) {
-    return state.preview?.files[0]?.docId || (state.inputKind === "word" ? state.files[0]?.docId || "" : "");
+    if (manualEntity.docId) return manualEntity.docId;
+    return sanitizeDocOptions(state)[0]?.docId || "";
+  }
+
+  function currentSanitizeSources(includeDocId: boolean): BatchSanitizeSource[] {
+    if (sanitize.inputKind !== "word") return [];
+    return sanitize.files
+      .map((file) => {
+        const docId = docIdForSanitizeFile(file);
+        return {
+          kind: "word" as const,
+          path: file.path,
+          ...(includeDocId && docId ? { docId } : {})
+        };
+      })
+      .filter((source) => !includeDocId || Boolean(source.docId));
   }
 
   function currentSanitizeSource(includeDocId: boolean): SanitizeSource | null {
     if (sanitize.inputKind === "word") {
       const file = sanitize.files[0];
       if (!file) return null;
-      const docId = currentSanitizeDocId();
+      const docId = docIdForSanitizeFile(file);
       return {
         kind: "word",
         path: file.path,
@@ -367,7 +418,7 @@ export default function App() {
   }
 
   async function selectSanitizeFiles() {
-    await importSanitizeFiles((api) => api.importDocuments({ purpose: "sanitize", multi: false }));
+    await importSanitizeFiles((api) => api.importDocuments({ purpose: "sanitize", multi: true }));
   }
 
   async function importSanitizeFiles(loader: (api: DesktopApi) => Promise<ApiResponse<DocumentSummary[]>>) {
@@ -382,8 +433,10 @@ export default function App() {
         preview: null,
         entities: [],
         results: [],
+        resultBlocked: [],
         imageHandling: null
       }));
+      setManualEntity(EMPTY_MANUAL_ENTITY);
       setStatus({
         tone: "info",
         title: "已导入文档",
@@ -401,6 +454,7 @@ export default function App() {
       preview: null,
       entities: [],
       results: [],
+      resultBlocked: [],
       imageHandling: null
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
@@ -414,6 +468,7 @@ export default function App() {
       preview: null,
       entities: [],
       results: [],
+      resultBlocked: [],
       imageHandling: null
     }));
   }
@@ -426,6 +481,7 @@ export default function App() {
       preview: null,
       entities: [],
       results: [],
+      resultBlocked: [],
       imageHandling: null
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
@@ -469,26 +525,40 @@ export default function App() {
     }
 
     try {
-      setSanitize((current) => ({ ...current, previewing: true, results: [] }));
+      setSanitize((current) => ({ ...current, previewing: true, results: [], resultBlocked: [] }));
       const preview = await callDesktop((api) =>
-        api.previewSanitize({
-          source
-        })
+        sanitize.inputKind === "word"
+          ? api.previewSanitizeBatch({
+            sources: currentSanitizeSources(false)
+          })
+          : api.previewSanitize({
+            source
+          })
       );
 
       setSanitize((current) => {
-        const docId = preview.files[0]?.docId || currentSanitizeDocId(current);
+        const previewDocIds = preview.files.map((file) => file.docId);
         return {
           ...current,
-          files: current.inputKind === "word" && current.files[0] && preview.files[0]
-            ? [{ ...current.files[0], docId: preview.files[0].docId }]
+          files: current.inputKind === "word"
+            ? current.files.map((file) => {
+              const previewFile = preview.files.find((item) => item.path === file.path);
+              return previewFile ? { ...file, docId: previewFile.docId } : file;
+            })
             : current.files,
           preview,
-          entities: mergePreviewEntities(preview.entities, current.entities, docId),
+          entities: mergePreviewEntities(preview.entities, current.entities, previewDocIds),
           previewing: false,
+          resultBlocked: [],
           imageHandling: null
         };
       });
+      setManualEntity((current) => ({
+        ...current,
+        docId: preview.files.some((file) => file.docId === current.docId)
+          ? current.docId
+          : preview.files[0]?.docId || ""
+      }));
 
       if (preview.blocked.length) {
         setStatus({
@@ -535,6 +605,7 @@ export default function App() {
   function addManualEntity() {
     const docId = currentSanitizeDocId();
     const originalValue = manualEntity.originalValue.trim();
+    const targetFile = sanitize.files.find((file) => docIdForSanitizeFile(file) === docId);
     if (!docId) {
       setStatus({ tone: "error", title: "请先预览识别当前输入" });
       return;
@@ -549,7 +620,7 @@ export default function App() {
     const entity: EntityItem = {
       id: `manual-${Date.now()}`,
       docId,
-      filePath: sanitize.inputKind === "word" ? sanitize.files[0]?.path || "" : "pasted-text",
+      filePath: sanitize.inputKind === "word" ? targetFile?.path || "" : "pasted-text",
       type: GENERIC_ENTITY_TYPE,
       originalValue,
       maskedValue,
@@ -564,7 +635,10 @@ export default function App() {
       ...current,
       entities: [...current.entities, entity]
     }));
-    setManualEntity(EMPTY_MANUAL_ENTITY);
+    setManualEntity((current) => ({
+      ...EMPTY_MANUAL_ENTITY,
+      docId: current.docId
+    }));
     setStatus({
       tone: "success",
       title: "已添加手动实体",
@@ -574,7 +648,8 @@ export default function App() {
 
   async function runSanitize() {
     const source = currentSanitizeSource(true);
-    if (!source) {
+    const batchSources = sanitize.inputKind === "word" ? currentSanitizeSources(true) : [];
+    if (!source || (sanitize.inputKind === "word" && !batchSources.length)) {
       setStatus({ tone: "error", title: "请先输入待脱敏内容" });
       return;
     }
@@ -620,36 +695,54 @@ export default function App() {
     }
 
     try {
-      setSanitize((current) => ({ ...current, running: true, results: [] }));
+      setSanitize((current) => ({ ...current, running: true, results: [], resultBlocked: [] }));
       const result = await callDesktop((api) =>
-        api.runSanitize({
-          source,
-          mode: sanitize.mode,
-          entities: enabledEntities,
-          ...(outputDirectoryRequired ? { outputDir: sanitize.outputDir } : {}),
-          textOutputMode,
-          credential,
-          acknowledgements: {
-            imageHandling: sanitize.imageHandling || undefined,
-            imageContentUnmodified: sanitize.imageHandling === "keep"
-          }
-        })
+        sanitize.inputKind === "word"
+          ? api.runSanitizeBatch({
+            sources: batchSources as Array<BatchSanitizeSource & { docId: string }>,
+            mode: sanitize.mode,
+            entities: enabledEntities,
+            outputDir: sanitize.outputDir,
+            credential,
+            acknowledgements: {
+              imageHandling: sanitize.imageHandling || undefined,
+              imageContentUnmodified: sanitize.imageHandling === "keep"
+            }
+          })
+          : api.runSanitize({
+            source,
+            mode: sanitize.mode,
+            entities: enabledEntities,
+            ...(outputDirectoryRequired ? { outputDir: sanitize.outputDir } : {}),
+            textOutputMode,
+            credential,
+            acknowledgements: {
+              imageHandling: sanitize.imageHandling || undefined,
+              imageContentUnmodified: sanitize.imageHandling === "keep"
+            }
+          })
       );
 
       setSanitize((current) => ({
         ...current,
         running: false,
-        results: result.results
+        results: result.results,
+        resultBlocked: result.blocked || []
       }));
       const outputFileCount = result.results.reduce((count, item) =>
         count + (item.outputs.sanitizedFile ? 1 : 0) + (item.outputs.mappingFile ? 1 : 0),
       0);
       setStatus({
-        tone: "success",
-        title: outputFileCount ? "脱敏导出完成" : "脱敏文本已生成",
-        body: outputFileCount
-          ? `已生成 ${outputFileCount} 个输出文件。`
-          : "已在结果区生成可复制的脱敏文本。"
+        tone: result.blocked?.length ? "warning" : "success",
+        title: result.blocked?.length ? "部分文件导出失败" : outputFileCount ? "脱敏导出完成" : "脱敏文本已生成",
+        body: result.blocked?.length
+          ? outputFileCount
+            ? `已生成 ${outputFileCount} 个输出文件，${result.blocked.length} 个文件失败。`
+            : `${result.blocked.length} 个文件失败，未生成输出文件。`
+          : outputFileCount
+            ? `已生成 ${outputFileCount} 个输出文件。`
+            : "已在结果区生成可复制的脱敏文本。",
+        details: result.blocked?.map((item) => `${fileNameFromPath(item.path)}: ${item.error.message}`)
       });
     } catch (error) {
       setSanitize((current) => ({ ...current, running: false }));
@@ -851,6 +944,7 @@ export default function App() {
               state={sanitize}
               step={sanitizeStep}
               manualEntity={manualEntity}
+              manualDocOptions={sanitizeDocOptions()}
               onManualEntityChange={setManualEntity}
               onBack={() => openView("dashboard")}
               onInputKindChange={changeSanitizeInputKind}
@@ -1150,6 +1244,7 @@ function SanitizeWorkflow({
   state,
   step,
   manualEntity,
+  manualDocOptions,
   onManualEntityChange,
   onBack,
   onInputKindChange,
@@ -1173,6 +1268,7 @@ function SanitizeWorkflow({
   state: SanitizeState;
   step: number;
   manualEntity: typeof EMPTY_MANUAL_ENTITY;
+  manualDocOptions: ManualDocOption[];
   onManualEntityChange: (value: typeof EMPTY_MANUAL_ENTITY) => void;
   onBack: () => void;
   onInputKindChange: (kind: InputSourceKind) => void;
@@ -1195,10 +1291,7 @@ function SanitizeWorkflow({
 }) {
   const enabledCount = state.entities.filter((entity) => entity.enabled).length;
   const hasInput = state.inputKind === "word" ? state.files.length > 0 : state.pastedText.trim().length > 0;
-  const canAddManualEntity = Boolean(
-    state.preview?.files[0]?.docId ||
-    (state.inputKind === "word" && state.files[0]?.docId)
-  );
+  const canAddManualEntity = manualDocOptions.length > 0;
   const imageAckRequired = requiresImageAcknowledgement(state.preview);
   const isTextInput = state.inputKind === "text";
   const textOutputMode = state.textOutputMode || "file";
@@ -1246,12 +1339,14 @@ function SanitizeWorkflow({
           >
             <ManualEntityForm
               value={manualEntity}
+              docOptions={manualDocOptions}
               onChange={onManualEntityChange}
               onAdd={onAddManualEntity}
               disabled={!canAddManualEntity}
             />
             <EntityTable
               entities={state.entities}
+              docOptions={manualDocOptions}
               onChange={onEntityChange}
               onRemove={onRemoveEntity}
             />
@@ -1331,11 +1426,12 @@ function SanitizeWorkflow({
           </Panel>
 
           <Panel title="导出结果" icon={FolderOpen}>
-            {state.results.length ? (
+            {state.results.length || state.resultBlocked.length ? (
               <div className="space-y-4">
                 {state.results.map((result) => (
                   <OutputGroup key={sanitizeResultKey(result)} result={result} outputActions={outputActions} />
                 ))}
+                {state.resultBlocked.length ? <OutputBlockedList blocked={state.resultBlocked} /> : null}
               </div>
             ) : (
               <EmptyState icon={FolderOpen} title="等待导出" body="输出路径会在任务完成后显示。" />
@@ -1920,7 +2016,7 @@ function InputSourcePanel({
         <div className="space-y-3">
           <DocxUploadBox
             title="点击上传 DOCX"
-            description="支持 Word DOCX。旧版 DOC 请另存为 DOCX 后处理。"
+            description="支持一次选择多个 Word DOCX。旧版 DOC 请另存为 DOCX 后处理。"
             onSelect={onSelectFiles}
           />
           <FileList files={files} preview={preview} />
@@ -2164,30 +2260,51 @@ function FileList({ files, preview }: { files: DocumentSummary[]; preview: Previ
 
 function ManualEntityForm({
   value,
+  docOptions,
   onChange,
   onAdd,
   disabled
 }: {
   value: typeof EMPTY_MANUAL_ENTITY;
+  docOptions: ManualDocOption[];
   onChange: (value: typeof EMPTY_MANUAL_ENTITY) => void;
   onAdd: () => void;
   disabled: boolean;
 }) {
   return (
-    <div className="mb-4 grid grid-cols-1 gap-3 rounded-lg border border-border bg-surface-muted p-3 md:grid-cols-[1fr_1fr_auto]">
+    <div className={cn(
+      "mb-4 grid grid-cols-1 gap-3 rounded-lg border border-border bg-surface-muted p-3",
+      docOptions.length > 1
+        ? "md:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
+        : "md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+    )}>
+      {docOptions.length > 1 ? (
+        <select
+          value={value.docId || docOptions[0]?.docId || ""}
+          disabled={disabled}
+          onChange={(event) => onChange({ ...value, docId: event.target.value })}
+          className="min-w-0 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+        >
+          {docOptions.map((option) => (
+            <option key={option.docId} value={option.docId}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <input
         value={value.originalValue}
         disabled={disabled}
         onChange={(event) => onChange({ ...value, originalValue: event.target.value })}
         placeholder="原文值"
-        className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+        className="min-w-0 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
       />
       <input
         value={value.maskedValue}
         disabled={disabled}
         onChange={(event) => onChange({ ...value, maskedValue: event.target.value })}
         placeholder="脱敏值，留空自动生成"
-        className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+        className="min-w-0 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
       />
       <Button icon={Plus} variant="secondary" disabled={disabled} onClick={onAdd}>
         添加
@@ -2198,16 +2315,37 @@ function ManualEntityForm({
 
 function EntityTable({
   entities,
+  docOptions,
   onChange,
   onRemove
 }: {
   entities: EntityItem[];
+  docOptions: ManualDocOption[];
   onChange: (index: number, patch: Partial<EntityItem>) => void;
   onRemove: (index: number) => void;
 }) {
   if (!entities.length) {
     return <EmptyState icon={FileCheck2} title="暂无实体" body="预览识别或手动添加后显示实体表。" />;
   }
+
+  const knownDocIds = new Set(docOptions.map((option) => option.docId));
+  const groups = [
+    ...docOptions.map((option) => ({
+      docId: option.docId,
+      label: option.label,
+      rows: entities
+        .map((entity, index) => ({ entity, index }))
+        .filter((row) => row.entity.docId === option.docId)
+    })),
+    {
+      docId: "__unknown__",
+      label: "未分组",
+      rows: entities
+        .map((entity, index) => ({ entity, index }))
+        .filter((row) => !knownDocIds.has(row.entity.docId))
+    }
+  ].filter((group) => group.rows.length);
+  const showGroupHeaders = groups.length > 1;
 
   return (
     <div className="overflow-hidden rounded-lg border border-border">
@@ -2224,52 +2362,61 @@ function EntityTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-border bg-surface text-sm">
-            {entities.map((entity, index) => (
-              <tr key={entity.id} className={cn(!entity.enabled && "opacity-55")}>
-                <td className="px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={entity.enabled}
-                    onChange={(event) => onChange(index, { enabled: event.target.checked })}
-                    className="h-4 w-4 accent-primary"
-                  />
-                </td>
-                <td className="px-4 py-3">
-                  <input
-                    value={entity.originalValue}
-                    onChange={(event) => onChange(index, { originalValue: event.target.value })}
-                    className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 font-mono text-xs outline-none focus:border-primary"
-                  />
-                </td>
-                <td className="px-4 py-3">
-                  <input
-                    value={entity.maskedValue}
-                    onChange={(event) => onChange(index, { maskedValue: event.target.value })}
-                    className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 font-mono text-xs outline-none focus:border-primary"
-                  />
-                </td>
-                <td className="px-4 py-3">
-                  <code className="rounded bg-surface-muted px-2 py-1 font-mono text-xs text-primary">
-                    {entity.stableId}
-                  </code>
-                </td>
-                <td className="px-4 py-3">
-                  <StatusBadge tone={entitySourceTone(entity.source)}>
-                    {entitySourceLabel(entity.source)}
-                  </StatusBadge>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    type="button"
-                    onClick={() => onRemove(index)}
-                    className="rounded-lg p-2 text-on-surface-muted transition hover:bg-danger-muted hover:text-danger"
-                    title="移除此实体"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {groups.flatMap((group) => [
+              showGroupHeaders ? (
+                <tr key={`${group.docId}-header`} className="bg-surface-muted/80">
+                  <td colSpan={6} className="px-4 py-2 text-xs font-bold text-on-surface-muted">
+                    {group.label} · {group.rows.length} 个实体
+                  </td>
+                </tr>
+              ) : null,
+              ...group.rows.map(({ entity, index }) => (
+                <tr key={entity.id} className={cn(!entity.enabled && "opacity-55")}>
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={entity.enabled}
+                      onChange={(event) => onChange(index, { enabled: event.target.checked })}
+                      className="h-4 w-4 accent-primary"
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <input
+                      value={entity.originalValue}
+                      onChange={(event) => onChange(index, { originalValue: event.target.value })}
+                      className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 font-mono text-xs outline-none focus:border-primary"
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <input
+                      value={entity.maskedValue}
+                      onChange={(event) => onChange(index, { maskedValue: event.target.value })}
+                      className="w-full rounded-lg border border-border bg-surface px-2 py-1.5 font-mono text-xs outline-none focus:border-primary"
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <code className="rounded bg-surface-muted px-2 py-1 font-mono text-xs text-primary">
+                      {entity.stableId}
+                    </code>
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge tone={entitySourceTone(entity.source)}>
+                      {entitySourceLabel(entity.source)}
+                    </StatusBadge>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onRemove(index)}
+                      className="rounded-lg p-2 text-on-surface-muted transition hover:bg-danger-muted hover:text-danger"
+                      title="移除此实体"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            ])}
           </tbody>
         </table>
       </div>
@@ -2532,6 +2679,25 @@ function OutputGroup({
       ) : null}
       {result.sanitizedText ? <div className="mt-4"><TextResult title="脱敏文本" value={result.sanitizedText} /></div> : null}
       {result.warnings.length > 0 && <WarningList warnings={result.warnings} />}
+    </div>
+  );
+}
+
+function OutputBlockedList({ blocked }: { blocked: PreviewBlockedFile[] }) {
+  return (
+    <div className="rounded-lg border border-danger/20 bg-danger-muted p-4 text-danger">
+      <div className="mb-3 flex items-center gap-2">
+        <XCircle size={16} />
+        <p className="text-sm font-bold">导出失败 {blocked.length} 个文件</p>
+      </div>
+      <ul className="space-y-2 text-xs">
+        {blocked.map((item) => (
+          <li key={`${item.path}-${item.error.message}`} className="rounded border border-danger/15 bg-surface/70 px-3 py-2">
+            <p className="font-semibold">{fileNameFromPath(item.path)}</p>
+            <p className="mt-1 break-words opacity-90">{item.error.message}</p>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -2849,12 +3015,13 @@ function downloadTextFile(file: EntitySetExportResult) {
   URL.revokeObjectURL(url);
 }
 
-function mergePreviewEntities(previewEntities: EntityItem[], currentEntities: EntityItem[], docId: string) {
+function mergePreviewEntities(previewEntities: EntityItem[], currentEntities: EntityItem[], docIds: string[]) {
   const previewKeys = new Set(
     previewEntities.map((entity) => `${entity.docId}:${entity.originalValue}`)
   );
+  const previewDocIds = new Set(docIds);
   const manualEntities = currentEntities.filter((entity) => {
-    if (entity.source !== "manual" || entity.docId !== docId) return false;
+    if (entity.source !== "manual" || !previewDocIds.has(entity.docId)) return false;
     return !previewKeys.has(`${entity.docId}:${entity.originalValue}`);
   });
 

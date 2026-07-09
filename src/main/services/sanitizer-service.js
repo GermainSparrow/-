@@ -211,6 +211,32 @@ async function previewSanitization(source) {
   };
 }
 
+async function previewSanitizationBatch(sources) {
+  const documents = [];
+  const blocked = [];
+
+  for (const source of sources) {
+    try {
+      const document = await extractSourceDocument(source);
+      documents.push(document);
+      previewedSourceKeys.add(previewKeyForSource(source, document.docId));
+    } catch (error) {
+      blocked.push({
+        path: sourceLabel(source),
+        error: toPublicError(error)
+      });
+    }
+  }
+
+  return {
+    sourceKind: "word",
+    sourceLabel: "批量 DOCX",
+    files: documents.map(publicDocumentSummary),
+    blocked,
+    entities: detectEntities(documents, await listEntitySets())
+  };
+}
+
 async function sanitizeTextSource({ text, outputDir, entities, outputStem, writeFile = true }) {
   const sanitizedText = applySanitization(text, entities);
   const leaks = findOriginalLeaks(sanitizedText, entities);
@@ -354,6 +380,35 @@ async function runSanitization({ source, mode, entities, outputDir, credential, 
   }
 }
 
+async function runSanitizationBatch({ sources, mode, entities, outputDir, credential, acknowledgements = {} }) {
+  const results = [];
+  const blocked = [];
+
+  for (const source of sources) {
+    try {
+      const result = await runSanitization({
+        source,
+        mode,
+        entities,
+        outputDir,
+        credential,
+        acknowledgements
+      });
+      results.push(...result.results);
+    } catch (error) {
+      blocked.push({
+        path: sourceLabel(source),
+        error: toPublicError(error)
+      });
+    }
+  }
+
+  return {
+    results,
+    blocked
+  };
+}
+
 async function cleanupFiles(filePaths) {
   await Promise.all(filePaths.map((filePath) => fs.unlink(filePath).catch(() => {})));
 }
@@ -438,8 +493,10 @@ async function runRestoration({ source, mappingPath, outputDir, credential }) {
 module.exports = {
   clearPreviewedSourcesForTest: () => previewedSourceKeys.clear(),
   createTextDocId,
+  previewSanitizationBatch,
   previewSanitization,
   runRestoration,
+  runSanitizationBatch,
   runSanitization,
   unlockMapping
 };

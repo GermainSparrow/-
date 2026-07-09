@@ -76,6 +76,16 @@ const previewSchema = z.object({
   source: sourceSchema
 });
 
+const batchWordSourceSchema = z.object({
+  kind: z.literal("word"),
+  path: z.string().min(1),
+  docId: z.string().min(1).optional()
+});
+
+const previewBatchSchema = z.object({
+  sources: z.array(batchWordSourceSchema.omit({ docId: true })).min(1)
+});
+
 const credentialSchema = z.discriminatedUnion("method", [
   z.object({
     method: z.literal("password"),
@@ -111,6 +121,25 @@ const sanitizeRunSchema = z.object({
       code: "custom",
       path: ["outputDir"],
       message: "请选择输出目录"
+    });
+  }
+});
+
+const sanitizeBatchRunSchema = z.object({
+  sources: z.array(batchWordSourceSchema.extend({
+    docId: z.string().min(1)
+  })).min(1),
+  mode: z.enum(["irreversible", "reversible"]),
+  entities: z.array(entitySchema),
+  outputDir: z.string().min(1),
+  credential: credentialSchema.optional(),
+  acknowledgements: acknowledgementSchema
+}).superRefine((value, context) => {
+  if (value.mode === "reversible" && !value.credential) {
+    context.addIssue({
+      code: "custom",
+      path: ["credential"],
+      message: "可恢复脱敏必须提供口令或密钥文件"
     });
   }
 });
@@ -169,7 +198,9 @@ function parseWithSchema(schema, payload) {
 module.exports = {
   documentImportSchema,
   previewSchema,
+  previewBatchSchema,
   sanitizeRunSchema,
+  sanitizeBatchRunSchema,
   outputFileActionSchema,
   unlockMappingSchema,
   restoreRunSchema,
