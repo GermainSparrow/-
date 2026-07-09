@@ -874,7 +874,7 @@ test("preview includes built in shudao entity set entries", async () => {
   try {
     const preview = await previewSanitization({
       kind: "text",
-      text: "四川路桥与四川路航联合施工。SRBG、川路桥发〔2026〕1号、川路航发〔2026〕2号、蜀道司发〔2026〕3号。"
+      text: "四川路桥与四川路航联合施工。SRBG、川路桥发〔2026〕1号、川路航发〔2026〕2号、蜀道司发〔2026〕3号、蜀道司办〔2025〕77号。蜀道、蜀道投资集团、成渝公司、四川成渝高速、蜀道高速集团、蜀道资本集团、蜀道铁路投资集团、蜀道新制式轨道集团、蜀道物流集团、蜀道集采平台。"
     });
     const customValues = preview.entities
       .filter((entity) => entity.source === "custom")
@@ -885,6 +885,17 @@ test("preview includes built in shudao entity set entries", async () => {
     assert.ok(customValues.includes("川路桥发"));
     assert.ok(customValues.includes("川路航发"));
     assert.ok(customValues.includes("蜀道司发"));
+    assert.ok(customValues.includes("蜀道司办"));
+    assert.ok(customValues.includes("蜀道"));
+    assert.ok(customValues.includes("蜀道投资集团"));
+    assert.ok(customValues.includes("成渝公司"));
+    assert.ok(customValues.includes("四川成渝高速"));
+    assert.ok(customValues.includes("蜀道高速集团"));
+    assert.ok(customValues.includes("蜀道资本集团"));
+    assert.ok(customValues.includes("蜀道铁路投资集团"));
+    assert.ok(customValues.includes("蜀道新制式轨道集团"));
+    assert.ok(customValues.includes("蜀道物流集团"));
+    assert.ok(customValues.includes("蜀道集采平台"));
     assert.ok(preview.entities.every((entity) => entity.source !== "custom" || entity.type === "entity"));
   } finally {
     clearEntitySetStoreForTest();
@@ -918,6 +929,20 @@ test("merges updated built in aliases into existing local entity set store", asy
           enabled: true
         },
         {
+          id: "shudao-cygs",
+          type: "company",
+          canonicalName: "四川成渝高速公路股份有限公司",
+          aliases: ["四川成渝"],
+          enabled: true
+        },
+        {
+          id: "shudao-shugao",
+          type: "company",
+          canonicalName: "四川蜀道高速公路集团有限公司",
+          aliases: [],
+          enabled: true
+        },
+        {
           id: "srbc-luhang",
           type: "company",
           canonicalName: "四川路航建设工程有限责任公司",
@@ -930,10 +955,53 @@ test("merges updated built in aliases into existing local entity set store", asy
     const [entitySet] = await listEntitySets();
     const aliasesById = new Map(entitySet.items.map((item) => [item.id, item.aliases]));
     assert.ok(aliasesById.get("shudao-group").includes("蜀道司发"));
+    assert.ok(aliasesById.get("shudao-group").includes("蜀道司办"));
+    assert.ok(aliasesById.get("shudao-group").includes("蜀道投资集团"));
     assert.ok(aliasesById.get("shudao-srbc-listed").includes("SRBG"));
     assert.ok(aliasesById.get("shudao-srbc-listed").includes("川路桥发"));
+    assert.ok(aliasesById.get("shudao-cygs").includes("成渝公司"));
+    assert.ok(aliasesById.get("shudao-shugao").includes("蜀道高速集团"));
     assert.ok(aliasesById.get("srbc-luhang").includes("川路航发"));
-    assert.equal(entitySet.version, "2026.07.09");
+    assert.equal(entitySet.version, "2026.07.09.1");
+  } finally {
+    clearEntitySetStoreForTest();
+  }
+});
+
+test("keeps removed built in aliases when later default aliases are merged", async () => {
+  const tempDir = await makeTempDir();
+  clearEntitySetStoreForTest();
+  configureEntitySetStore(tempDir);
+  try {
+    await fs.writeFile(path.join(tempDir, "entity-sets.json"), JSON.stringify([{
+      id: "builtin-shudao-companies",
+      name: "蜀道系公司实体集",
+      enabled: true,
+      version: "2026.07.09",
+      updatedAt: "2026-07-09T00:00:00.000Z",
+      items: [
+        {
+          id: "shudao-group",
+          type: "company",
+          canonicalName: "蜀道投资集团有限责任公司",
+          aliases: ["蜀道集团", "蜀道司发"],
+          enabled: true
+        },
+        {
+          id: "shudao-srbc-listed",
+          type: "company",
+          canonicalName: "四川路桥建设集团股份有限公司",
+          aliases: ["四川路桥", "路桥股份", "川路桥", "川路桥发"],
+          enabled: true
+        }
+      ]
+    }], null, 2), "utf8");
+
+    const [entitySet] = await listEntitySets();
+    const aliasesById = new Map(entitySet.items.map((item) => [item.id, item.aliases]));
+    assert.ok(aliasesById.get("shudao-group").includes("蜀道司办"));
+    assert.equal(aliasesById.get("shudao-srbc-listed").includes("SRBG"), false);
+    assert.equal(entitySet.version, "2026.07.09.1");
   } finally {
     clearEntitySetStoreForTest();
   }
@@ -1205,6 +1273,70 @@ test("does not sanitize docx text ranges across separate paragraphs", async () =
   assert.doesNotMatch(documentXml, /A公司/);
   assert.match(documentXml, /四川公路/);
   assert.match(documentXml, /桥梁建设集团有限公司/);
+});
+
+test("sanitizes docx red-head title text with degraded organization suffix", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "degraded-red-head.docx");
+  const outputPath = path.join(tempDir, "degraded-red-head.sanitized.docx");
+  const companyName = "四川公路桥梁建设集团有限公司";
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", [
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    '<w:body>',
+    '<w:p><w:r><w:t>四川公路桥梁建设集有限</w:t></w:r><w:r><w:t>公文</w:t></w:r><w:r><w:t>件</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>四川公路桥梁建设集团有限公司</w:t></w:r></w:p>',
+    '</w:body></w:document>'
+  ].join(""));
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  await sanitizeDocxDocument({
+    filePath: inputPath,
+    outputPath,
+    entities: [manualEntity({ originalValue: companyName, maskedValue: "A公司", stableId: "ENTITY_001" })]
+  });
+
+  const sanitized = await extractDocxDocument(outputPath, "doc1");
+  assert.match(sanitized.textSegments.map((segment) => segment.text).join("\n"), /A公司文件/);
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(outputPath));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  assert.doesNotMatch(documentXml, /四川公路桥梁建设集有限/);
+  assert.doesNotMatch(documentXml, new RegExp(companyName));
+});
+
+test("previews docx red-head degraded title when full organization appears nowhere else", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "degraded-red-head-only.docx");
+  const companyName = "四川公路桥梁建设集团有限公司";
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", [
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    '<w:body>',
+    '<w:p><w:r><w:t>四川公路桥梁建设集有限</w:t></w:r><w:r><w:t>公文</w:t></w:r><w:r><w:t>件</w:t></w:r></w:p>',
+    '</w:body></w:document>'
+  ].join(""));
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  clearEntitySetStoreForTest();
+  try {
+    const preview = await previewSanitization({ kind: "word", path: inputPath });
+    assert.ok(preview.entities.some((entity) => entity.originalValue === companyName));
+
+    const docId = preview.files[0].docId;
+    const result = await runSanitization({
+      source: { kind: "word", path: inputPath, docId },
+      mode: "irreversible",
+      entities: preview.entities,
+      outputDir: tempDir
+    });
+
+    const sanitized = await extractDocxDocument(result.results[0].outputs.sanitizedFile, "doc1");
+    assert.match(sanitized.textSegments.map((segment) => segment.text).join("\n"), /A公司文件/);
+  } finally {
+    clearEntitySetStoreForTest();
+  }
 });
 
 test("does not sanitize docx text ranges across nested text box paragraphs", async () => {

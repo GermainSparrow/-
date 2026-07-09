@@ -108,6 +108,36 @@ function defaultSets() {
   return normalizeEntitySets(clone(defaultEntitySets));
 }
 
+const BUILTIN_ALIAS_UPDATES = [
+  {
+    setId: "builtin-shudao-companies",
+    version: "2026.07.09",
+    items: {
+      "shudao-group": ["蜀道司发"],
+      "shudao-srbc-listed": ["川路桥", "川路桥发", "SRBG"],
+      "srbc-luhang": ["川路航", "川路航发"]
+    }
+  },
+  {
+    setId: "builtin-shudao-companies",
+    version: "2026.07.09.1",
+    items: {
+      "shudao-group": ["蜀道", "蜀道投资集团", "蜀道司办", "蜀道集采平台", "蜀道招标采购平台", "蜀道集团招标管理服务中心"],
+      "shudao-cygs": ["成渝公司", "四川成渝高速"],
+      "shudao-shugao": ["蜀道高速集团", "蜀道高速公路集团"],
+      "shudao-rail-investment": ["蜀道铁路投资集团"],
+      "shudao-rail-transit": ["蜀道轨道交通集团", "蜀道新制式轨道集团"],
+      "shudao-rail-operation": ["蜀道铁路运营集团", "蜀道铁路运营管理集团"],
+      "shudao-urban-rural": ["蜀道城乡集团", "蜀道城乡投资集团"],
+      "shudao-logistics": ["蜀道物流集团"],
+      "shudao-traffic-service": ["蜀道交通服务集团", "蜀道服务集团"],
+      "shudao-capital": ["蜀道资本集团", "蜀道资本控股集团"],
+      "shudao-zhilian": ["四川蜀道智联科技产业发展股份有限公司", "蜀道智联"],
+      "shudao-clean-energy": ["蜀道清洁能源集团"]
+    }
+  }
+];
+
 function compareVersion(left, right) {
   const leftParts = String(left || "").split(".").map((part) => Number(part) || 0);
   const rightParts = String(right || "").split(".").map((part) => Number(part) || 0);
@@ -118,6 +148,28 @@ function compareVersion(left, right) {
     if (leftPart !== rightPart) return leftPart - rightPart;
   }
   return 0;
+}
+
+function builtinAliasUpdatesFor(entitySet, defaultEntitySet) {
+  const updatesByItemId = new Map();
+  let hasApplicableUpdate = false;
+  for (const update of BUILTIN_ALIAS_UPDATES) {
+    if (update.setId !== entitySet.id) continue;
+    if (compareVersion(entitySet.version, update.version) >= 0) continue;
+    if (compareVersion(update.version, defaultEntitySet.version) > 0) continue;
+
+    hasApplicableUpdate = true;
+    for (const [itemId, aliases] of Object.entries(update.items)) {
+      updatesByItemId.set(itemId, [
+        ...(updatesByItemId.get(itemId) || []),
+        ...aliases
+      ]);
+    }
+  }
+  return {
+    hasApplicableUpdate,
+    updatesByItemId
+  };
 }
 
 function mergeDefaultBuiltinUpdates(entitySets) {
@@ -132,27 +184,26 @@ function mergeDefaultBuiltinUpdates(entitySets) {
     if (!defaultEntitySet) return entitySet;
     if (compareVersion(entitySet.version, defaultEntitySet.version) >= 0) return entitySet;
 
-    const defaultItemsById = new Map(defaultEntitySet.items.map((item) => [item.id, item]));
-    let changed = false;
-    const items = entitySet.items.map((item) => {
-      const defaultItem = defaultItemsById.get(item.id);
-      if (!defaultItem) return item;
+    const { hasApplicableUpdate, updatesByItemId } = builtinAliasUpdatesFor(entitySet, defaultEntitySet);
+    if (!hasApplicableUpdate) return entitySet;
 
-      const aliases = uniqueStrings([...(item.aliases || []), ...(defaultItem.aliases || [])])
+    const items = entitySet.items.map((item) => {
+      const aliasUpdates = updatesByItemId.get(item.id);
+      if (!aliasUpdates?.length) return item;
+
+      const aliases = uniqueStrings([...(item.aliases || []), ...aliasUpdates])
         .filter((alias) => alias !== item.canonicalName);
       const currentAliases = item.aliases || [];
       const aliasesChanged = aliases.length !== currentAliases.length ||
         aliases.some((alias, index) => alias !== currentAliases[index]);
       if (!aliasesChanged) return item;
 
-      changed = true;
       return {
         ...item,
         aliases
       };
     });
 
-    if (!changed) return entitySet;
     return {
       ...entitySet,
       version: defaultEntitySet.version,

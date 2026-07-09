@@ -265,6 +265,8 @@ function collectDocxText(fileName, xml) {
   }
 
   const texts = collectXmlTextWithRangeBoundaries(xml);
+  const inferredTexts = texts.flatMap(inferredRedHeadOrganizationTexts);
+  texts.push(...inferredTexts);
   if (fileName === "word/settings.xml") {
     texts.push(...collectTextAttributes(xml, /<(?:[A-Za-z_][\w.-]*:)?docVar\b[^>]*>/g, ["name", "val"]));
   }
@@ -275,6 +277,22 @@ function collectDocxText(fileName, xml) {
     texts.push(...collectTextAttributes(xml, /<(?:[A-Za-z_][\w.-]*:)?person\b[^>]*>/g, ["author"]));
   }
   return texts;
+}
+
+function inferredRedHeadOrganizationTexts(text) {
+  const value = String(text || "");
+  const inferred = value.replace(/([\u4e00-\u9fff]{2,40})集有限公(?=文件)/g, "$1集团有限公司");
+  return inferred !== value ? [inferred] : [];
+}
+
+function redHeadOrganizationVariants(originalValue) {
+  const value = String(originalValue || "").trim();
+  if (!/^[\u4e00-\u9fff]{6,}公司$/.test(value)) return [];
+
+  const degraded = value
+    .replace(/集团/g, "集")
+    .replace(/公司$/g, "公");
+  return degraded !== value ? [degraded] : [];
 }
 
 function replacementPairsForMode(entities, mode) {
@@ -292,6 +310,9 @@ function replacementPairsForMode(entities, mode) {
     }
     if (entity.maskedValue) {
       replacements.push({ from: entity.originalValue, to: entity.maskedValue });
+      for (const variant of redHeadOrganizationVariants(entity.originalValue)) {
+        replacements.push({ from: variant, to: entity.maskedValue });
+      }
     }
   }
   return replacements;
