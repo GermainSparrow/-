@@ -4,6 +4,8 @@ export type SanitizeMode = "irreversible" | "reversible";
 
 export type TextOutputMode = "file" | "copy";
 
+export type ImageHandling = "keep" | "delete";
+
 export type CredentialMethod = "password" | "keyFile";
 
 export type InputSourceKind = "word" | "text";
@@ -176,6 +178,7 @@ export interface DesktopApi {
     credential?: Credential;
     acknowledgements?: {
       imageContentUnmodified?: boolean;
+      imageHandling?: ImageHandling;
     };
   }) => Promise<ApiResponse<SanitizeResult>>;
   getLastOutputDirectory: () => Promise<ApiResponse<string | null>>;

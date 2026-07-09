@@ -56,7 +56,8 @@ const droppedDocumentImportSchema = z.object({
 });
 
 const acknowledgementSchema = z.object({
-  imageContentUnmodified: z.boolean().optional().default(false)
+  imageContentUnmodified: z.boolean().optional().default(false),
+  imageHandling: z.enum(["keep", "delete"]).optional()
 }).default({});
 
 const wordSourceSchema = z.object({

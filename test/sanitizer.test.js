@@ -924,6 +924,44 @@ test("sanitizes docx text nodes", async () => {
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
 });
 
+test("previews and sanitizes docx headers and footers", async () => {
+  const tempDir = await makeTempDir();
+  const inputPath = path.join(tempDir, "header-footer.docx");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>正文负责人李明</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/header1.xml", '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>页眉负责人王强</w:t></w:r></w:p></w:hdr>');
+  zip.file("word/footer1.xml", '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>页脚负责人赵敏</w:t></w:r></w:p></w:ftr>');
+  await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
+
+  const preview = await previewSanitization({ kind: "word", path: inputPath });
+  const previewValues = preview.entities.map((entity) => entity.originalValue);
+  assert.ok(previewValues.includes("李明"));
+  assert.ok(previewValues.includes("王强"));
+  assert.ok(previewValues.includes("赵敏"));
+
+  const docId = preview.files[0].docId;
+  const result = await runSanitization({
+    source: { kind: "word", path: inputPath, docId },
+    mode: "irreversible",
+    entities: [
+      manualEntity({ id: "body", docId, filePath: inputPath, originalValue: "李明", maskedValue: "张三", stableId: "PERSON_001" }),
+      manualEntity({ id: "header", docId, filePath: inputPath, originalValue: "王强", maskedValue: "李四", stableId: "PERSON_002" }),
+      manualEntity({ id: "footer", docId, filePath: inputPath, originalValue: "赵敏", maskedValue: "王五", stableId: "PERSON_003" })
+    ],
+    outputDir: tempDir
+  });
+
+  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(result.results[0].outputs.sanitizedFile));
+  const documentXml = await sanitizedZip.file("word/document.xml").async("text");
+  const headerXml = await sanitizedZip.file("word/header1.xml").async("text");
+  const footerXml = await sanitizedZip.file("word/footer1.xml").async("text");
+  assert.doesNotMatch(`${documentXml}\n${headerXml}\n${footerXml}`, /李明|王强|赵敏/);
+  assert.match(documentXml, /张三/);
+  assert.match(headerXml, /李四/);
+  assert.match(footerXml, /王五/);
+});
+
 test("does not escape docx structural tags with text-tag prefixes", async () => {
   const tempDir = await makeTempDir();
   const inputPath = path.join(tempDir, "prefix-structure.docx");
@@ -942,13 +980,23 @@ test("does not escape docx structural tags with text-tag prefixes", async () => 
   assert.doesNotMatch(documentXml, /李明/);
 });
 
-test("previews docx images but requires acknowledgement before sanitization", async () => {
+test("previews docx images and requires keep or delete choice before sanitization", async () => {
   const tempDir = await makeTempDir();
   const inputPath = path.join(tempDir, "image.docx");
   const zip = new JSZip();
   zip.file("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
-  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>负责人李明</w:t></w:r></w:p></w:body></w:document>');
+  zip.file("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body><w:p><w:r><w:t>负责人李明</w:t></w:r><w:r><w:drawing><wp:inline><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>');
+  zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>');
+  zip.file("word/header1.xml", '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:p><w:r><w:drawing><wp:inline><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId2"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:hdr>');
+  zip.file("word/_rels/header1.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image2.png"/></Relationships>');
+  zip.file("word/footer1.xml", '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml"><w:p><w:r><w:pict><v:shape><v:imagedata r:id="rId3"/></v:shape></w:pict></w:r></w:p></w:ftr>');
+  zip.file("word/_rels/footer1.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image3.png"/></Relationships>');
+  zip.file("word/charts/chart1.xml", '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:spPr><a:blipFill><a:blip r:embed="rId4"/></a:blipFill></c:spPr></c:chartSpace>');
+  zip.file("word/charts/_rels/chart1.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image4.png"/></Relationships>');
   zip.file("word/media/image1.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  zip.file("word/media/image2.png", Buffer.from([0x89, 0x50, 0x4e, 0x48]));
+  zip.file("word/media/image3.png", Buffer.from([0x89, 0x50, 0x4e, 0x49]));
+  zip.file("word/media/image4.png", Buffer.from([0x89, 0x50, 0x4e, 0x4a]));
   await fs.writeFile(inputPath, await zip.generateAsync({ type: "nodebuffer" }));
 
   const preview = await previewSanitization({ kind: "word", path: inputPath });
@@ -970,15 +1018,39 @@ test("previews docx images but requires acknowledgement before sanitization", as
     mode: "irreversible",
     entities: [entity],
     outputDir: tempDir,
-    acknowledgements: { imageContentUnmodified: true }
+    acknowledgements: { imageHandling: "keep", imageContentUnmodified: true }
   });
   const item = result.results[0];
   assert.ok(item.warnings.some((warning) => warning.includes("图片内内容无法修改")));
 
-  const sanitizedZip = await JSZip.loadAsync(await fs.readFile(item.outputs.sanitizedFile));
-  assert.ok(sanitizedZip.file("word/media/image1.png"));
+  const keptZip = await JSZip.loadAsync(await fs.readFile(item.outputs.sanitizedFile));
+  assert.ok(keptZip.file("word/media/image1.png"));
+  assert.ok(keptZip.file("word/media/image2.png"));
+  assert.ok(keptZip.file("word/media/image3.png"));
+  assert.ok(keptZip.file("word/media/image4.png"));
+  assert.match(await keptZip.file("word/_rels/document.xml.rels").async("text"), /relationships\/image/);
   const sanitized = await extractDocxDocument(item.outputs.sanitizedFile, "verify");
   assert.doesNotMatch(sanitized.textSegments.map((segment) => segment.text).join("\n"), /李明/);
+
+  const deleteResult = await runSanitization({
+    source: { kind: "word", path: inputPath, docId },
+    mode: "irreversible",
+    entities: [entity],
+    outputDir: tempDir,
+    acknowledgements: { imageHandling: "delete" }
+  });
+  const deleteItem = deleteResult.results[0];
+  assert.ok(deleteItem.warnings.every((warning) => !warning.includes("图片内内容无法修改")));
+  const deletedZip = await JSZip.loadAsync(await fs.readFile(deleteItem.outputs.sanitizedFile));
+  assert.deepEqual(Object.keys(deletedZip.files).filter((name) => name.startsWith("word/media/")), []);
+  assert.doesNotMatch(await deletedZip.file("word/_rels/document.xml.rels").async("text"), /relationships\/image|rId1/);
+  assert.doesNotMatch(await deletedZip.file("word/_rels/header1.xml.rels").async("text"), /relationships\/image|rId2/);
+  assert.doesNotMatch(await deletedZip.file("word/_rels/footer1.xml.rels").async("text"), /relationships\/image|rId3/);
+  assert.doesNotMatch(await deletedZip.file("word/charts/_rels/chart1.xml.rels").async("text"), /relationships\/image|rId4/);
+  assert.doesNotMatch(await deletedZip.file("word/document.xml").async("text"), /<w:drawing|rId1/);
+  assert.doesNotMatch(await deletedZip.file("word/header1.xml").async("text"), /<w:drawing|rId2/);
+  assert.doesNotMatch(await deletedZip.file("word/footer1.xml").async("text"), /<w:pict|rId3/);
+  assert.doesNotMatch(await deletedZip.file("word/charts/chart1.xml").async("text"), /<a:blip\b|<a:blipFill\b|rId4/);
 });
 
 test("sanitizes docx field code text", async () => {

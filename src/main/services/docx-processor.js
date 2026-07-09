@@ -6,7 +6,9 @@ const { applyRestoration, applySanitization, detectStructuredValues, findOrigina
 const { collectGenericXmlText, collectXmlText, decodeXml, encodeXml, transformGenericXmlText, transformXmlText } = require("./xml-utils");
 
 const CUSTOM_XML_WARNING = "Word 文档包含自定义 XML，已纳入脱敏/还原处理；如文档依赖表单绑定或第三方系统数据，请复核输出文件。";
-const IMAGE_CONTENT_WARNING = "Word 文档包含图片，图片内内容无法修改；请确认图片中不包含需要脱敏的敏感信息后继续。";
+const IMAGE_CONTENT_WARNING = "Word 文档包含图片，图片内内容无法修改；请选择保留图片或删除全部图片后继续。";
+const IMAGE_CONTAINER_LOCAL_NAMES = ["AlternateContent", "drawing", "pict"];
+const IMAGE_REFERENCE_LOCAL_NAMES = ["blipFill", "blip", "imagedata", "imageData"];
 
 function isCustomXmlPath(fileName) {
   return /^customXml\/(?!_rels\/)(?!itemProps\d*\.xml$).*\.xml$/.test(fileName);
@@ -68,6 +70,13 @@ function hasDocxImages(fileNames) {
   return fileNames.some((name) => name.startsWith("word/media/"));
 }
 
+function normalizeImageHandling(acknowledgements) {
+  if (acknowledgements.imageHandling === "keep" || acknowledgements.imageHandling === "delete") {
+    return acknowledgements.imageHandling;
+  }
+  return acknowledgements.imageContentUnmodified ? "keep" : null;
+}
+
 function inspectDocxZip(zip) {
   const warnings = [];
   const fileNames = Object.keys(zip.files);
@@ -123,8 +132,94 @@ function transformExternalRelationshipTargets(xml, transform) {
   });
 }
 
+function relationshipAttribute(tag, attributeName) {
+  const pattern = new RegExp(`\\b${attributeName}=(["'])(.*?)\\1`);
+  return tag.match(pattern)?.[2] || "";
+}
+
+function isImageRelationshipTag(tag) {
+  return /\/relationships\/image$/u.test(relationshipAttribute(tag, "Type"));
+}
+
+function collectImageRelationshipIds(xml) {
+  const ids = new Set();
+  xml.replace(/<Relationship\b[^>]*\/?>/g, (tag) => {
+    if (isImageRelationshipTag(tag)) {
+      const id = relationshipAttribute(tag, "Id");
+      if (id) ids.add(id);
+    }
+    return tag;
+  });
+  return ids;
+}
+
+function removeImageRelationships(xml) {
+  return xml.replace(/<Relationship\b[^>]*\/?>/g, (tag) => {
+    return isImageRelationshipTag(tag) ? "" : tag;
+  });
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sourcePartForRelationshipPath(fileName) {
+  const marker = "/_rels/";
+  const markerIndex = fileName.lastIndexOf(marker);
+  if (markerIndex === -1 || !fileName.endsWith(".rels")) return null;
+  const directory = fileName.slice(0, markerIndex);
+  const relationshipFile = fileName.slice(markerIndex + marker.length, -".rels".length);
+  return `${directory}/${relationshipFile}`;
+}
+
+async function collectImageRelationshipIdsByPart(zip) {
+  const idsByPart = new Map();
+  for (const fileName of Object.keys(zip.files)) {
+    if (zip.files[fileName].dir || !isRelationshipPath(fileName)) continue;
+    const sourcePart = sourcePartForRelationshipPath(fileName);
+    if (!sourcePart) continue;
+    idsByPart.set(sourcePart, await collectImageRelationshipIdsFromZipEntry(zip, fileName));
+  }
+  return idsByPart;
+}
+
+function removeElementByLocalNameWhenReferencingId(xml, localName, relationshipId) {
+  const elementPattern = new RegExp(`<((?:[A-Za-z_][\\w.-]*:)?${localName})\\b[\\s\\S]*?<\\/\\1>`, "g");
+  const selfClosingElementPattern = new RegExp(`<((?:[A-Za-z_][\\w.-]*:)?${localName})\\b[^<>]*?\\/>`, "g");
+  const referencePattern = new RegExp(`\\b(?:[A-Za-z_][\\w.-]*:)?(?:embed|link|id|relid)=(["'])${escapeRegExp(relationshipId)}\\1`);
+  const removeIfReferencingId = (element) => {
+    return referencePattern.test(element) ? "" : element;
+  };
+  return xml
+    .replace(elementPattern, removeIfReferencingId)
+    .replace(selfClosingElementPattern, removeIfReferencingId);
+}
+
+function removeImageReferencesFromXml(xml, relationshipIds) {
+  if (!relationshipIds?.size) return xml;
+  let transformedXml = xml;
+  for (const relationshipId of relationshipIds) {
+    for (const localName of IMAGE_CONTAINER_LOCAL_NAMES) {
+      transformedXml = removeElementByLocalNameWhenReferencingId(transformedXml, localName, relationshipId);
+    }
+    for (const localName of IMAGE_REFERENCE_LOCAL_NAMES) {
+      transformedXml = removeElementByLocalNameWhenReferencingId(transformedXml, localName, relationshipId);
+    }
+  }
+  return transformedXml;
+}
+
+async function collectImageRelationshipIdsFromZipEntry(zip, fileName) {
+  const xml = await zip.file(fileName).async("text");
+  return collectImageRelationshipIds(xml);
+}
+
+function removeDocxImageFiles(zip) {
+  for (const fileName of Object.keys(zip.files)) {
+    if (fileName.startsWith("word/media/")) {
+      zip.remove(fileName);
+    }
+  }
 }
 
 function attributePattern(attributeNames) {
@@ -298,10 +393,15 @@ async function extractDocxDocument(filePath, docId) {
 
 async function transformDocxFile({ filePath, outputPath, entities, mode, acknowledgements = {} }) {
   const zip = await loadZip(filePath);
-  const warnings = inspectDocxZip(zip);
-  if (mode !== "restore" && hasDocxImages(Object.keys(zip.files)) && !acknowledgements.imageContentUnmodified) {
+  let warnings = inspectDocxZip(zip);
+  const containsImages = hasDocxImages(Object.keys(zip.files));
+  const imageHandling = normalizeImageHandling(acknowledgements);
+  if (mode !== "restore" && containsImages && !imageHandling) {
     throw new AppError("DOCX_IMAGE_ACK_REQUIRED", IMAGE_CONTENT_WARNING);
   }
+  const imageRelationshipIdsByPart = mode !== "restore" && imageHandling === "delete"
+    ? await collectImageRelationshipIdsByPart(zip)
+    : new Map();
 
   const transform = mode === "restore"
     ? (text) => applyRestoration(text, entities)
@@ -313,14 +413,31 @@ async function transformDocxFile({ filePath, outputPath, entities, mode, acknowl
     const xml = await file.async("text");
     assertNoUnsupportedTextXml(fileName, xml);
     if (isRelationshipPath(fileName)) {
-      zip.file(fileName, transformExternalRelationshipTargets(xml, transform));
+      let transformedXml = transformExternalRelationshipTargets(xml, transform);
+      if (mode !== "restore" && imageHandling === "delete") {
+        transformedXml = removeImageRelationships(transformedXml);
+      }
+      zip.file(fileName, transformedXml);
       continue;
     }
-    if (!isProcessableXmlPath(fileName)) continue;
+    const imageRelationshipIds = imageRelationshipIdsByPart.get(fileName);
+    if (!isProcessableXmlPath(fileName)) {
+      if (imageRelationshipIds?.size) {
+        zip.file(fileName, removeImageReferencesFromXml(xml, imageRelationshipIds));
+      }
+      continue;
+    }
     if (/<w:(del|ins)\b/.test(xml) || /<w:vanish\b/.test(xml)) {
       throw new AppError("BLOCKED_UNCONFIRMED_CONTENT", "Word 文档包含修订记录或隐藏文本，请接受修订并清理隐藏内容后重试");
     }
-    zip.file(fileName, transformDocxText(fileName, xml, transform));
+    let transformedXml = transformDocxText(fileName, xml, transform);
+    transformedXml = removeImageReferencesFromXml(transformedXml, imageRelationshipIds);
+    zip.file(fileName, transformedXml);
+  }
+
+  if (mode !== "restore" && imageHandling === "delete") {
+    removeDocxImageFiles(zip);
+    warnings = warnings.filter((warning) => warning !== IMAGE_CONTENT_WARNING);
   }
 
   if (mode !== "restore") {

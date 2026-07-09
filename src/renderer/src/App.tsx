@@ -31,6 +31,7 @@ import type {
   EntityItem,
   EntitySet,
   EntitySetItem,
+  ImageHandling,
   InputSourceKind,
   NavigationView,
   PreviewBlockedFile,
@@ -71,7 +72,7 @@ interface SanitizeState {
   results: SanitizeResultItem[];
   running: boolean;
   previewing: boolean;
-  imageContentAcknowledged: boolean;
+  imageHandling: ImageHandling | null;
 }
 
 interface RestoreState {
@@ -105,7 +106,7 @@ const INITIAL_SANITIZE_STATE: SanitizeState = {
   results: [],
   running: false,
   previewing: false,
-  imageContentAcknowledged: false
+  imageHandling: null
 };
 
 const INITIAL_RESTORE_STATE: RestoreState = {
@@ -312,7 +313,7 @@ export default function App() {
         preview: null,
         entities: [],
         results: [],
-        imageContentAcknowledged: false
+        imageHandling: null
       }));
       setStatus({
         tone: "info",
@@ -331,7 +332,7 @@ export default function App() {
       preview: null,
       entities: [],
       results: [],
-      imageContentAcknowledged: false
+      imageHandling: null
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
   }
@@ -344,7 +345,7 @@ export default function App() {
       preview: null,
       entities: [],
       results: [],
-      imageContentAcknowledged: false
+      imageHandling: null
     }));
   }
 
@@ -356,7 +357,7 @@ export default function App() {
       preview: null,
       entities: [],
       results: [],
-      imageContentAcknowledged: false
+      imageHandling: null
     }));
     setManualEntity(EMPTY_MANUAL_ENTITY);
   }
@@ -416,7 +417,7 @@ export default function App() {
           preview,
           entities: mergePreviewEntities(preview.entities, current.entities, docId),
           previewing: false,
-          imageContentAcknowledged: false
+          imageHandling: null
         };
       });
 
@@ -516,11 +517,11 @@ export default function App() {
       setStatus({ tone: "error", title: "请选择输出目录" });
       return;
     }
-    if (requiresImageAcknowledgement(sanitize.preview) && !sanitize.imageContentAcknowledged) {
+    if (requiresImageAcknowledgement(sanitize.preview) && !sanitize.imageHandling) {
       setStatus({
         tone: "warning",
-        title: "请先确认图片风险",
-        body: "图片内内容不会被修改，请确认图片中不包含需要脱敏的敏感信息后继续。"
+        title: "请选择图片处理方式",
+        body: "图片内内容无法脱敏，请选择保留图片或删除全部图片后继续。"
       });
       return;
     }
@@ -560,7 +561,8 @@ export default function App() {
           textOutputMode,
           credential,
           acknowledgements: {
-            imageContentUnmodified: sanitize.imageContentAcknowledged
+            imageHandling: sanitize.imageHandling || undefined,
+            imageContentUnmodified: sanitize.imageHandling === "keep"
           }
         })
       );
@@ -814,8 +816,8 @@ export default function App() {
               onAddManualEntity={addManualEntity}
               onEntityChange={updateEntity}
               onRemoveEntity={removeEntity}
-              onImageAckChange={(imageContentAcknowledged) =>
-                setSanitize((current) => ({ ...current, imageContentAcknowledged }))
+              onImageHandlingChange={(imageHandling) =>
+                setSanitize((current) => ({ ...current, imageHandling }))
               }
             />
           )}
@@ -1097,7 +1099,7 @@ function SanitizeWorkflow({
   onAddManualEntity,
   onEntityChange,
   onRemoveEntity,
-  onImageAckChange
+  onImageHandlingChange
 }: {
   state: SanitizeState;
   step: number;
@@ -1120,7 +1122,7 @@ function SanitizeWorkflow({
   onAddManualEntity: () => void;
   onEntityChange: (index: number, patch: Partial<EntityItem>) => void;
   onRemoveEntity: (index: number) => void;
-  onImageAckChange: (checked: boolean) => void;
+  onImageHandlingChange: (imageHandling: ImageHandling) => void;
 }) {
   const enabledCount = state.entities.filter((entity) => entity.enabled).length;
   const hasInput = state.inputKind === "word" ? state.files.length > 0 : state.pastedText.trim().length > 0;
@@ -1185,6 +1187,14 @@ function SanitizeWorkflow({
               onChange={onEntityChange}
               onRemove={onRemoveEntity}
             />
+            {imageAckRequired ? (
+              <div className="mt-5">
+                <ImageHandlingSelector
+                  value={state.imageHandling}
+                  onChange={onImageHandlingChange}
+                />
+              </div>
+            ) : null}
           </Panel>
         </div>
 
@@ -1217,17 +1227,6 @@ function SanitizeWorkflow({
                 </div>
               ) : null}
 
-              {outputDirectoryRequired ? (
-                <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
-              ) : null}
-
-              {imageAckRequired ? (
-                <ImageAcknowledgement
-                  checked={state.imageContentAcknowledged}
-                  onChange={onImageAckChange}
-                />
-              ) : null}
-
               <div className="rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-on-surface-muted">启用实体</span>
@@ -1253,7 +1252,11 @@ function SanitizeWorkflow({
                 ) : null}
               </div>
 
-              <Button icon={FileCheck2} block onClick={onRun} disabled={state.running || (imageAckRequired && !state.imageContentAcknowledged)}>
+              {outputDirectoryRequired ? (
+                <OutputSelector outputDir={state.outputDir} onSelect={onSelectOutput} />
+              ) : null}
+
+              <Button icon={FileCheck2} block onClick={onRun} disabled={state.running || (imageAckRequired && !state.imageHandling)}>
                 {state.running ? "处理中" : "执行脱敏"}
               </Button>
             </div>
@@ -2057,23 +2060,35 @@ function SelectedDocxFile({ file }: { file: DocumentSummary | null }) {
   );
 }
 
-function ImageAcknowledgement({
-  checked,
+function ImageHandlingSelector({
+  value,
   onChange
 }: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
+  value: ImageHandling | null;
+  onChange: (imageHandling: ImageHandling) => void;
 }) {
   return (
-    <label className="flex items-start gap-3 rounded-lg border border-warning/25 bg-warning-muted px-3 py-3 text-sm text-warning">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 h-4 w-4 shrink-0 accent-warning"
-      />
-      <span>我已知晓图片内内容不会被修改，并确认可继续导出。</span>
-    </label>
+    <div className="space-y-3">
+      <div className="rounded-lg border border-warning/25 bg-warning-muted px-3 py-3 text-sm leading-6 text-warning">
+        Word 文档包含图片，图片内内容无法修改；请确认图片中不包含需要脱敏的敏感信息后继续。
+      </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <SelectableOption
+          selected={value === "keep"}
+          title="保留图片"
+          description="图片原样保留，图片内文字不会被脱敏。"
+          tone="warning"
+          onClick={() => onChange("keep")}
+        />
+        <SelectableOption
+          selected={value === "delete"}
+          title="删除全部图片"
+          description="导出文件会移除所有图片及其引用。"
+          tone="success"
+          onClick={() => onChange("delete")}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -2283,26 +2298,33 @@ function SelectableOption({
   selected: boolean;
   title: string;
   description: string;
-  tone: "primary" | "success";
+  tone: "primary" | "success" | "warning";
   onClick: () => void;
 }) {
+  const selectedToneClass = {
+    primary: "border-primary bg-primary-muted",
+    success: "border-success bg-success-muted",
+    warning: "border-warning bg-warning-muted"
+  }[tone];
+  const selectedDotClass = {
+    primary: "border-primary bg-primary",
+    success: "border-success bg-success",
+    warning: "border-warning bg-warning"
+  }[tone];
+
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
         "flex items-start gap-3 rounded-lg border p-4 text-left transition",
-        selected
-          ? tone === "success"
-            ? "border-success bg-success-muted"
-            : "border-primary bg-primary-muted"
-          : "border-border bg-surface hover:bg-surface-muted"
+        selected ? selectedToneClass : "border-border bg-surface hover:bg-surface-muted"
       )}
     >
       <span
         className={cn(
           "mt-0.5 h-4 w-4 rounded-full border",
-          selected ? (tone === "success" ? "border-success bg-success" : "border-primary bg-primary") : "border-border-strong"
+          selected ? selectedDotClass : "border-border-strong"
         )}
       />
       <span>
