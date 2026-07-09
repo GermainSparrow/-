@@ -148,6 +148,13 @@ export interface RestoreResult {
   restoredText: string | null;
 }
 
+export interface OutputFilePreview {
+  filePath: string;
+  content: string;
+  warnings: string[];
+  truncated: boolean;
+}
+
 export type SanitizeSource =
   | { kind: "word"; path: string; docId?: string }
   | { kind: "text"; text: string; docId?: string };
@@ -183,6 +190,18 @@ export interface DesktopApi {
   }) => Promise<ApiResponse<SanitizeResult>>;
   getLastOutputDirectory: () => Promise<ApiResponse<string | null>>;
   selectOutputDirectory: () => Promise<ApiResponse<string | null>>;
+  openOutputFile: (payload: {
+    filePath: string;
+  }) => Promise<ApiResponse<null>>;
+  previewOutputFile: (payload: {
+    filePath: string;
+  }) => Promise<ApiResponse<OutputFilePreview>>;
+  revealOutputFile: (payload: {
+    filePath: string;
+  }) => Promise<ApiResponse<null>>;
+  deleteOutputFile: (payload: {
+    filePath: string;
+  }) => Promise<ApiResponse<null>>;
   unlockMapping: (payload: {
     mappingPath: string;
     credential: Credential;

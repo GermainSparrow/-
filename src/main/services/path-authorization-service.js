@@ -6,6 +6,7 @@ const authorizedFilePathsByPurpose = new Map(
   Array.from(FILE_PURPOSES, (purpose) => [purpose, new Set()])
 );
 const authorizedOutputDirectories = new Set();
+const authorizedOutputFilePaths = new Set();
 
 function normalizePath(filePath) {
   const resolved = path.resolve(filePath);
@@ -32,6 +33,16 @@ function authorizeOutputDirectory(directoryPath) {
   authorizedOutputDirectories.add(normalizePath(directoryPath));
 }
 
+function authorizeOutputFilePaths(filePaths) {
+  for (const filePath of filePaths) {
+    authorizedOutputFilePaths.add(normalizePath(filePath));
+  }
+}
+
+function revokeAuthorizedOutputFilePath(filePath) {
+  authorizedOutputFilePaths.delete(normalizePath(filePath));
+}
+
 function assertAuthorizedFilePath(filePath, purpose) {
   const authorizedFilePaths = getAuthorizedFilePaths(purpose);
   if (!authorizedFilePaths.has(normalizePath(filePath))) {
@@ -48,6 +59,16 @@ function assertAuthorizedOutputDirectory(directoryPath) {
       path: directoryPath
     });
   }
+}
+
+function assertAuthorizedOutputFilePath(filePath) {
+  const normalizedFilePath = normalizePath(filePath);
+  if (authorizedOutputFilePaths.has(normalizedFilePath)) {
+    return;
+  }
+  throw new AppError("UNAUTHORIZED_OUTPUT_FILE_PATH", "输出文件路径未由当前会话生成或授权", {
+    path: filePath
+  });
 }
 
 function assertCredentialAuthorized(credential) {
@@ -99,14 +120,18 @@ function clearAuthorizationsForTest() {
     authorizedFilePaths.clear();
   }
   authorizedOutputDirectories.clear();
+  authorizedOutputFilePaths.clear();
 }
 
 module.exports = {
+  assertAuthorizedOutputFilePath,
   assertPreviewPayloadAuthorized,
   assertRestorePayloadAuthorized,
   assertSanitizePayloadAuthorized,
   assertUnlockMappingPayloadAuthorized,
   authorizeFilePaths,
   authorizeOutputDirectory,
+  authorizeOutputFilePaths,
+  revokeAuthorizedOutputFilePath,
   clearAuthorizationsForTest
 };

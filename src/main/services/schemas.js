@@ -141,6 +141,10 @@ const restoreRunSchema = z.object({
   credential: credentialSchema
 });
 
+const outputFileActionSchema = z.object({
+  filePath: z.string().min(1)
+});
+
 const entitySetSaveSchema = z.object({
   entitySet: entitySetSchema
 });
@@ -172,6 +176,7 @@ module.exports = {
   droppedDocumentImportSchema,
   previewSchema,
   sanitizeRunSchema,
+  outputFileActionSchema,
   unlockMappingSchema,
   restoreRunSchema,
   entitySetSaveSchema,

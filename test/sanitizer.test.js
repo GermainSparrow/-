@@ -28,6 +28,9 @@ const {
   saveLastOutputDirectory
 } = require("../src/main/services/output-directory-service");
 const {
+  previewOutputFile
+} = require("../src/main/services/output-preview-service");
+const {
   createEncryptedMapping,
   decryptMappingPackage
 } = require("../src/main/services/crypto-service");
@@ -60,11 +63,14 @@ const {
   summarizeFile
 } = require("../src/main/services/document-service");
 const {
+  assertAuthorizedOutputFilePath,
   assertPreviewPayloadAuthorized,
   assertRestorePayloadAuthorized,
   assertSanitizePayloadAuthorized,
   authorizeFilePaths,
   authorizeOutputDirectory,
+  authorizeOutputFilePaths,
+  revokeAuthorizedOutputFilePath,
   clearAuthorizationsForTest
 } = require("../src/main/services/path-authorization-service");
 const {
@@ -119,6 +125,33 @@ test("persists last output directory and ignores stale paths", async () => {
   await fs.rm(outputDir, { recursive: true, force: true });
   assert.equal(await getLastOutputDirectory(), null);
   clearOutputDirectoryStoreForTest();
+});
+
+test("previews generated txt and docx output files", async () => {
+  const tempDir = await makeTempDir();
+  const textPath = path.join(tempDir, "result.txt");
+  const docxPath = path.join(tempDir, "result.docx");
+  await fs.writeFile(textPath, "负责人张三", "utf8");
+  await writeDocxWithText(docxPath, "负责人李四");
+
+  const textPreview = await previewOutputFile(textPath);
+  assert.equal(textPreview.content, "负责人张三");
+  assert.equal(textPreview.truncated, false);
+
+  const docxPreview = await previewOutputFile(docxPath);
+  assert.match(docxPreview.content, /【正文】/);
+  assert.match(docxPreview.content, /负责人李四/);
+
+  await assert.rejects(() => previewOutputFile(path.join(tempDir, "mapping.json")), (error) => {
+    return error.code === "OUTPUT_PREVIEW_UNSUPPORTED";
+  });
+
+  const largeTextPath = path.join(tempDir, "large.txt");
+  await fs.writeFile(largeTextPath, "a".repeat(130000), "utf8");
+  const largePreview = await previewOutputFile(largeTextPath);
+  assert.equal(largePreview.truncated, true);
+  assert.ok(largePreview.content.length < 130000);
+  assert.ok(largePreview.content.startsWith("a".repeat(1000)));
 });
 
 test("detects structured entities and replaces longer strings first", () => {
@@ -521,8 +554,30 @@ test("rejects unapproved ipc paths before service execution and skips text file 
 
   authorizeFilePaths([inputPath], "sanitize");
   assert.throws(() => assertSanitizePayloadAuthorized(payload), /输出目录未通过目录选择器授权/);
+  const outputPath = path.join(tempDir, "result.docx");
+  const nestedOutputPath = path.join(tempDir, "nested", "result.docx");
+  assert.throws(() => assertAuthorizedOutputFilePath(outputPath), (error) => {
+    return error.code === "UNAUTHORIZED_OUTPUT_FILE_PATH";
+  });
 
   authorizeOutputDirectory(tempDir);
+  assert.throws(() => assertAuthorizedOutputFilePath(outputPath), (error) => {
+    return error.code === "UNAUTHORIZED_OUTPUT_FILE_PATH";
+  });
+  authorizeOutputFilePaths([outputPath]);
+  assert.doesNotThrow(() => assertAuthorizedOutputFilePath(outputPath));
+  assert.throws(() => assertAuthorizedOutputFilePath(nestedOutputPath), (error) => {
+    return error.code === "UNAUTHORIZED_OUTPUT_FILE_PATH";
+  });
+  authorizeOutputFilePaths([nestedOutputPath]);
+  assert.doesNotThrow(() => assertAuthorizedOutputFilePath(nestedOutputPath));
+  revokeAuthorizedOutputFilePath(outputPath);
+  assert.throws(() => assertAuthorizedOutputFilePath(outputPath), (error) => {
+    return error.code === "UNAUTHORIZED_OUTPUT_FILE_PATH";
+  });
+  assert.throws(() => assertAuthorizedOutputFilePath(path.join(`${tempDir}-sibling`, "result.docx")), (error) => {
+    return error.code === "UNAUTHORIZED_OUTPUT_FILE_PATH";
+  });
   assert.throws(() => assertSanitizePayloadAuthorized(payload), (error) => {
     return error.code === "UNAUTHORIZED_FILE_PATH" && error.details?.purpose === "keyFile";
   });

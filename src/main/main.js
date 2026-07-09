@@ -1,5 +1,6 @@
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, Menu } = require("electron");
+const fs = require("node:fs/promises");
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
 const {
   documentImportSchema,
   droppedDocumentImportSchema,
@@ -7,14 +8,17 @@ const {
   entitySetExportSchema,
   entitySetImportSchema,
   entitySetSaveSchema,
+  outputFileActionSchema,
   parseWithSchema,
   previewSchema,
   restoreRunSchema,
   sanitizeRunSchema,
   unlockMappingSchema
 } = require("./services/schemas");
+const { AppError } = require("./services/app-error");
 const { runSafely } = require("./services/response");
 const { previewSanitization, runRestoration, runSanitization, unlockMapping } = require("./services/sanitizer-service");
+const { previewOutputFile } = require("./services/output-preview-service");
 const {
   configureEntitySetStore,
   deleteEntitySet,
@@ -29,8 +33,11 @@ const {
   assertRestorePayloadAuthorized,
   assertSanitizePayloadAuthorized,
   assertUnlockMappingPayloadAuthorized,
+  assertAuthorizedOutputFilePath,
   authorizeFilePaths,
-  authorizeOutputDirectory
+  authorizeOutputDirectory,
+  authorizeOutputFilePaths,
+  revokeAuthorizedOutputFilePath
 } = require("./services/path-authorization-service");
 const {
   configureOutputDirectoryStore,
@@ -123,6 +130,37 @@ app.whenReady().then(() => {
     return result.filePaths[0];
   }));
 
+  ipcMain.handle("output-file:open", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(outputFileActionSchema, payload);
+    await assertExistingAuthorizedOutputFile(data.filePath);
+    const message = await shell.openPath(data.filePath);
+    if (message) {
+      throw new AppError("OUTPUT_FILE_OPEN_FAILED", "无法打开文档", { message });
+    }
+    return null;
+  }));
+
+  ipcMain.handle("output-file:preview", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(outputFileActionSchema, payload);
+    await assertExistingAuthorizedOutputFile(data.filePath);
+    return previewOutputFile(data.filePath);
+  }));
+
+  ipcMain.handle("output-file:reveal", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(outputFileActionSchema, payload);
+    await assertExistingAuthorizedOutputFile(data.filePath);
+    shell.showItemInFolder(data.filePath);
+    return null;
+  }));
+
+  ipcMain.handle("output-file:delete", async (_event, payload) => runSafely(async () => {
+    const data = parseWithSchema(outputFileActionSchema, payload);
+    await assertExistingAuthorizedOutputFile(data.filePath);
+    await shell.trashItem(data.filePath);
+    revokeAuthorizedOutputFilePath(data.filePath);
+    return null;
+  }));
+
   ipcMain.handle("sanitize:preview", async (_event, payload) => runSafely(async () => {
     const data = parseWithSchema(previewSchema, payload);
     assertPreviewPayloadAuthorized(data);
@@ -132,7 +170,9 @@ app.whenReady().then(() => {
   ipcMain.handle("sanitize:run", async (_event, payload) => runSafely(async () => {
     const data = parseWithSchema(sanitizeRunSchema, payload);
     assertSanitizePayloadAuthorized(data);
-    return runSanitization(data);
+    const result = await runSanitization(data);
+    authorizeSanitizeOutputFiles(result);
+    return result;
   }));
 
   ipcMain.handle("mapping:unlock", async (_event, payload) => runSafely(async () => {
@@ -144,7 +184,9 @@ app.whenReady().then(() => {
   ipcMain.handle("restore:run", async (_event, payload) => runSafely(async () => {
     const data = parseWithSchema(restoreRunSchema, payload);
     assertRestorePayloadAuthorized(data);
-    return runRestoration(data);
+    const result = await runRestoration(data);
+    authorizeRestoreOutputFiles(result);
+    return result;
   }));
 
   ipcMain.handle("entity-sets:list", async () => runSafely(async () => listEntitySets()));
@@ -192,6 +234,39 @@ function getImportTitle(purpose) {
     keyFile: "选择密钥文件"
   };
   return titles[purpose] || "选择文件";
+}
+
+async function assertExistingAuthorizedOutputFile(filePath) {
+  assertAuthorizedOutputFilePath(filePath);
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch {
+    throw new AppError("OUTPUT_FILE_NOT_FOUND", "输出文件不存在或已被移动", {
+      path: filePath
+    });
+  }
+  if (!stat.isFile()) {
+    throw new AppError("OUTPUT_FILE_NOT_FILE", "输出路径不是文件", {
+      path: filePath
+    });
+  }
+}
+
+function authorizeSanitizeOutputFiles(result) {
+  const outputFilePaths = result.results.flatMap((item) => [
+    item.outputs.sanitizedFile,
+    item.outputs.mappingFile,
+    item.outputs.reportFile
+  ].filter(Boolean));
+  authorizeOutputFilePaths(outputFilePaths);
+}
+
+function authorizeRestoreOutputFiles(result) {
+  authorizeOutputFilePaths([
+    result.outputPath,
+    result.reportPath
+  ].filter(Boolean));
 }
 
 function getImportFilters(purpose) {

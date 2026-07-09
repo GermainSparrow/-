@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   CircleDot,
   Copy,
+  Eye,
   FileCheck2,
   FileText,
   FolderOpen,
@@ -17,6 +18,7 @@ import {
   ShieldCheck,
   Trash2,
   UploadCloud,
+  X,
   XCircle,
   type LucideIcon
 } from "lucide-react";
@@ -34,6 +36,7 @@ import type {
   ImageHandling,
   InputSourceKind,
   NavigationView,
+  OutputFilePreview,
   PreviewBlockedFile,
   PreviewResult,
   RestoreResult,
@@ -55,6 +58,17 @@ interface StatusMessage {
   title: string;
   body?: string;
   details?: string[];
+}
+
+interface OutputDocumentActionHandlers {
+  onPreviewDocument: (filePath: string, title: string) => void;
+  onOpenDocument: (filePath: string) => void;
+  onRevealDocument: (filePath: string) => void;
+  onDeleteDocument: (filePath: string) => void;
+}
+
+interface OutputPreviewState extends OutputFilePreview {
+  title: string;
 }
 
 interface SanitizeState {
@@ -135,6 +149,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<NavigationView>("dashboard");
   const [version, setVersion] = useState("...");
   const [status, setStatus] = useState<StatusMessage | null>(null);
+  const [outputPreview, setOutputPreview] = useState<OutputPreviewState | null>(null);
   const [sanitize, setSanitize] = useState<SanitizeState>(INITIAL_SANITIZE_STATE);
   const [restore, setRestore] = useState<RestoreState>(INITIAL_RESTORE_STATE);
   const [manualEntity, setManualEntity] = useState(EMPTY_MANUAL_ENTITY);
@@ -182,6 +197,66 @@ export default function App() {
       throw new Error(formatApiError(response.error));
     }
     return response.data as T;
+  }
+
+  async function openOutputDocument(filePath: string) {
+    try {
+      await callDesktop((api) => api.openOutputFile({ filePath }));
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function previewOutputDocument(filePath: string, title: string) {
+    try {
+      const preview = await callDesktop((api) => api.previewOutputFile({ filePath }));
+      setOutputPreview({
+        ...preview,
+        title
+      });
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function revealOutputDocument(filePath: string) {
+    try {
+      await callDesktop((api) => api.revealOutputFile({ filePath }));
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
+  }
+
+  async function deleteOutputDocument(filePath: string) {
+    if (!window.confirm("确定删除该文档吗？文件将移至系统回收站。")) {
+      return;
+    }
+
+    try {
+      await callDesktop((api) => api.deleteOutputFile({ filePath }));
+      setSanitize((current) => ({
+        ...current,
+        results: current.results.map((result) =>
+          result.outputs.sanitizedFile === filePath
+            ? {
+              ...result,
+              outputs: {
+                ...result.outputs,
+                sanitizedFile: null
+              }
+            }
+            : result
+        )
+      }));
+      setRestore((current) => (
+        current.result?.outputPath === filePath
+          ? { ...current, result: null }
+          : current
+      ));
+      setStatus({ tone: "success", title: "文档已删除", body: "文件已移至系统回收站。" });
+    } catch (error) {
+      setStatus(errorStatus(error));
+    }
   }
 
   async function loadEntitySets() {
@@ -775,6 +850,13 @@ export default function App() {
     setStatus(null);
   }
 
+  const outputActions: OutputDocumentActionHandlers = {
+    onPreviewDocument: (filePath, title) => void previewOutputDocument(filePath, title),
+    onOpenDocument: (filePath) => void openOutputDocument(filePath),
+    onRevealDocument: (filePath) => void revealOutputDocument(filePath),
+    onDeleteDocument: (filePath) => void deleteOutputDocument(filePath)
+  };
+
   return (
     <div className="h-screen bg-background text-on-background font-sans">
       <Sidebar activeView={activeView} version={version} onNavigate={openView} />
@@ -786,6 +868,7 @@ export default function App() {
               onStartRestore={() => openView("restore")}
               sanitizeResults={sanitize.results}
               restoreResult={restore.result}
+              outputActions={outputActions}
             />
           )}
 
@@ -819,6 +902,7 @@ export default function App() {
               onImageHandlingChange={(imageHandling) =>
                 setSanitize((current) => ({ ...current, imageHandling }))
               }
+              outputActions={outputActions}
             />
           )}
 
@@ -839,6 +923,7 @@ export default function App() {
                 setRestore((current) => ({ ...current, credentialMethod }))
               }
               onPasswordChange={(password) => setRestore((current) => ({ ...current, password }))}
+              outputActions={outputActions}
             />
           )}
 
@@ -856,6 +941,9 @@ export default function App() {
           )}
         </div>
       </main>
+      {outputPreview && (
+        <OutputPreviewModal preview={outputPreview} onClose={() => setOutputPreview(null)} />
+      )}
       {status && <StatusPanel status={status} onClose={() => setStatus(null)} />}
     </div>
   );
@@ -955,12 +1043,14 @@ function Dashboard({
   onStartSanitize,
   onStartRestore,
   sanitizeResults,
-  restoreResult
+  restoreResult,
+  outputActions
 }: {
   onStartSanitize: () => void;
   onStartRestore: () => void;
   sanitizeResults: SanitizeResultItem[];
   restoreResult: RestoreResult | null;
+  outputActions: OutputDocumentActionHandlers;
 }) {
   return (
     <div className="space-y-7">
@@ -999,14 +1089,21 @@ function Dashboard({
           {sanitizeResults.length || restoreResult ? (
             <div className="space-y-3">
               {sanitizeResults.map((result) => (
-                <OutputGroup key={sanitizeResultKey(result)} result={result} />
+                <OutputGroup key={sanitizeResultKey(result)} result={result} outputActions={outputActions} />
               ))}
               {restoreResult && (
-                <PathList
-                  rows={[
-                    ["还原文件", restoreResult.outputPath]
-                  ]}
-                />
+                <div className="rounded-lg border border-border bg-surface-muted p-4">
+                  <PathList
+                    rows={[
+                      ["还原文件", restoreResult.outputPath]
+                    ]}
+                  />
+                  <DocumentActionButtons
+                    filePath={restoreResult.outputPath}
+                    previewTitle="还原后内容预览"
+                    actions={outputActions}
+                  />
+                </div>
               )}
             </div>
           ) : (
@@ -1099,7 +1196,8 @@ function SanitizeWorkflow({
   onAddManualEntity,
   onEntityChange,
   onRemoveEntity,
-  onImageHandlingChange
+  onImageHandlingChange,
+  outputActions
 }: {
   state: SanitizeState;
   step: number;
@@ -1123,6 +1221,7 @@ function SanitizeWorkflow({
   onEntityChange: (index: number, patch: Partial<EntityItem>) => void;
   onRemoveEntity: (index: number) => void;
   onImageHandlingChange: (imageHandling: ImageHandling) => void;
+  outputActions: OutputDocumentActionHandlers;
 }) {
   const enabledCount = state.entities.filter((entity) => entity.enabled).length;
   const hasInput = state.inputKind === "word" ? state.files.length > 0 : state.pastedText.trim().length > 0;
@@ -1266,7 +1365,7 @@ function SanitizeWorkflow({
             {state.results.length ? (
               <div className="space-y-4">
                 {state.results.map((result) => (
-                  <OutputGroup key={sanitizeResultKey(result)} result={result} />
+                  <OutputGroup key={sanitizeResultKey(result)} result={result} outputActions={outputActions} />
                 ))}
               </div>
             ) : (
@@ -1292,7 +1391,8 @@ function RestoreWorkflow({
   onSelectKeyFile,
   onRun,
   onCredentialMethodChange,
-  onPasswordChange
+  onPasswordChange,
+  outputActions
 }: {
   state: RestoreState;
   onBack: () => void;
@@ -1307,6 +1407,7 @@ function RestoreWorkflow({
   onRun: () => void;
   onCredentialMethodChange: (method: CredentialMethod) => void;
   onPasswordChange: (password: string) => void;
+  outputActions: OutputDocumentActionHandlers;
 }) {
   return (
     <div className="space-y-6">
@@ -1370,6 +1471,11 @@ function RestoreWorkflow({
                   rows={[
                     ["还原文件", state.result.outputPath]
                   ]}
+                />
+                <DocumentActionButtons
+                  filePath={state.result.outputPath}
+                  previewTitle="还原后内容预览"
+                  actions={outputActions}
                 />
                 {state.result.restoredText ? (
                   <TextResult title="还原文本" value={state.result.restoredText} />
@@ -1502,7 +1608,7 @@ function Button({
 }: {
   children: ReactNode;
   icon?: LucideIcon;
-  variant?: "primary" | "secondary";
+  variant?: "primary" | "secondary" | "danger";
   block?: boolean;
   disabled?: boolean;
   onClick: () => void;
@@ -1517,7 +1623,9 @@ function Button({
         block && "w-full",
         variant === "primary"
           ? "bg-primary text-white hover:bg-primary-strong disabled:bg-border-strong"
-          : "border border-border bg-surface text-on-surface hover:bg-surface-muted disabled:text-on-surface-muted"
+          : variant === "danger"
+            ? "border border-danger/30 bg-danger-muted text-danger hover:bg-danger/10 disabled:text-on-surface-muted"
+            : "border border-border bg-surface text-on-surface hover:bg-surface-muted disabled:text-on-surface-muted"
       )}
     >
       {Icon && <Icon size={16} />}
@@ -2465,7 +2573,13 @@ function FilePickCard({
   );
 }
 
-function OutputGroup({ result }: { result: SanitizeResultItem }) {
+function OutputGroup({
+  result,
+  outputActions
+}: {
+  result: SanitizeResultItem;
+  outputActions: OutputDocumentActionHandlers;
+}) {
   const sourceTitle = result.sourceKind === "word" ? fileNameFromPath(result.sourceLabel) : result.sourceLabel;
 
   return (
@@ -2485,8 +2599,42 @@ function OutputGroup({ result }: { result: SanitizeResultItem }) {
           result.outputs.mappingFile ? ["映射文件", result.outputs.mappingFile] : null
         ].filter((row): row is [string, string] => Boolean(row))}
       />
+      {result.outputs.sanitizedFile ? (
+        <DocumentActionButtons
+          filePath={result.outputs.sanitizedFile}
+          previewTitle="脱敏后内容预览"
+          actions={outputActions}
+        />
+      ) : null}
       {result.sanitizedText ? <div className="mt-4"><TextResult title="脱敏文本" value={result.sanitizedText} /></div> : null}
       {result.warnings.length > 0 && <WarningList warnings={result.warnings} />}
+    </div>
+  );
+}
+
+function DocumentActionButtons({
+  filePath,
+  previewTitle,
+  actions
+}: {
+  filePath: string;
+  previewTitle: string;
+  actions: OutputDocumentActionHandlers;
+}) {
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      <Button icon={Eye} variant="secondary" onClick={() => actions.onPreviewDocument(filePath, previewTitle)}>
+        预览
+      </Button>
+      <Button icon={FileText} variant="secondary" onClick={() => actions.onOpenDocument(filePath)}>
+        打开文档
+      </Button>
+      <Button icon={FolderOpen} variant="secondary" onClick={() => actions.onRevealDocument(filePath)}>
+        打开所在文件夹
+      </Button>
+      <Button icon={Trash2} variant="danger" onClick={() => actions.onDeleteDocument(filePath)}>
+        删除文档
+      </Button>
     </div>
   );
 }
@@ -2502,6 +2650,77 @@ function PathList({ rows }: { rows: Array<[string, string]> }) {
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function OutputPreviewModal({
+  preview,
+  onClose
+}: {
+  preview: OutputPreviewState;
+  onClose: () => void;
+}) {
+  const displayContent = preview.content || "未抽取到可预览文本。";
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-5 py-6"
+      onMouseDown={onClose}
+    >
+      <div
+        className="flex max-h-[min(86vh,820px)] w-[min(100%,900px)] flex-col rounded-lg border border-border bg-surface shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Eye size={18} className="text-primary" />
+              <h3 className="text-sm font-bold text-on-surface">{preview.title}</h3>
+            </div>
+            <p className="mt-2 truncate font-mono text-[11px] text-on-surface-muted" title={preview.filePath}>
+              {preview.filePath}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="关闭预览"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border text-on-surface-muted hover:bg-surface-muted hover:text-on-surface"
+          >
+            <X size={17} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5 app-scrollbar">
+          {preview.warnings.length > 0 ? <WarningList warnings={preview.warnings} compact /> : null}
+          <textarea
+            readOnly
+            value={displayContent}
+            className="h-[min(54vh,520px)] min-h-[280px] w-full resize-none rounded-lg border border-border bg-surface-muted px-3 py-3 font-mono text-xs leading-6 text-on-surface outline-none"
+          />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4 text-xs text-on-surface-muted">
+          <span>
+            {preview.content.length} 字符{preview.truncated ? "，已截断" : ""}
+          </span>
+          <Button icon={Copy} variant="secondary" onClick={() => void navigator.clipboard?.writeText(preview.content)}>
+            复制内容
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
