@@ -1,6 +1,7 @@
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const {
   documentImportSchema,
   entitySetDeleteSchema,
@@ -79,6 +80,8 @@ function createMainWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "../../dist/renderer/index.html"));
   }
+
+  return mainWindow;
 }
 
 app.whenReady().then(() => {
@@ -225,7 +228,8 @@ app.whenReady().then(() => {
     return exportEntitySet(data);
   }));
 
-  createMainWindow();
+  const mainWindow = createMainWindow();
+  configureAutoUpdater(mainWindow);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -310,4 +314,36 @@ function isLocalRendererUrl(value) {
   } catch {
     return false;
   }
+}
+
+function configureAutoUpdater(mainWindow) {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("error", (error) => {
+    console.error("Auto update failed:", error);
+  });
+
+  autoUpdater.on("update-downloaded", async () => {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: "info",
+      buttons: ["立即重启安装", "稍后"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "发现新版本",
+      message: "新版本已下载完成，重启软件后将完成安装。"
+    });
+
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
+
+  autoUpdater.checkForUpdates().catch((error) => {
+    console.error("Auto update check failed:", error);
+  });
 }
